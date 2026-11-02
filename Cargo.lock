@@ -754,6 +754,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resound"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "mlua",
+ "vst3-host",
+]
+
+[[package]]
 name = "rtrb"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1007,15 +1016,6 @@ dependencies = [
  "vst3",
  "winapi",
  "xcb",
-]
-
-[[package]]
-name = "vstrust"
-version = "0.1.0"
-dependencies = [
- "hound",
- "mlua",
- "vst3-host",
 ]
 
 [[package]]

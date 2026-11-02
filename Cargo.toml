@@ -1,9 +1,9 @@
 [package]
-name = "vstrust"
+name = "resound"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 hound = "3.5.1"
-mlua = "0.12.2"
+mlua = { version = "0.12.2", features = ["lua52"] }
 vst3-host = "0.10.0"
