@@ -1,0 +1,8 @@
+[package]
+name = "vstrust"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hound = "3.5.1"
+vst3-host = "0.10.0"
