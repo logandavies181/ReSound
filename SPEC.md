@@ -42,7 +42,11 @@ Stdout/Stderr from the user's code is displayed as normal.
 The sequencer passes through config for the instruments to the renderer input unaltered from the Lua state and flattens
 any score data in the Lua state from the user's code and prepares it for the renderer.
 
-Placeholder for now, just local the .wav and VST file already specified and output a middle 'C' for VSTs and play samples a single time.
+Instrument config is a placeholder for now, just local the .wav and VST file already specified.
+
+Notes are based on the `pushChords()` function. Bars are automatically added as needed based on the output of the Lua
+State. Bars may be modified in terms of BPM and length in the future. For now they take on the default values as set in
+the user's Lua.
 
 ## Renderer
 

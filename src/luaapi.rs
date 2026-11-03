@@ -6,6 +6,8 @@ use mlua::{Lua, Table};
 pub struct LuaState {
     pub instruments: Vec<InstrumentConfig>,
     pub default_bpm: f64,
+    pub default_meter: f64,
+    pub chord_sets: Vec<ChordSet>,
 }
 
 impl Default for LuaState {
@@ -13,8 +15,29 @@ impl Default for LuaState {
         Self {
             instruments: Vec::new(),
             default_bpm: 120.0,
+            default_meter: 4.0,
+            chord_sets: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChordSet {
+    pub chords: Vec<Chord>,
+    pub at: f64,
+    pub times: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chord {
+    pub pitches: Vec<String>,
+    pub duration: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Duration {
+    pub length: f64,
+    pub ratio: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,10 +123,38 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
         })?,
     )?;
 
+    let bpm_state = Rc::clone(&state);
     module.set(
         "setDefaultBpm",
         lua.create_function(move |lua, bpm: f64| {
-            state.borrow_mut().default_bpm = bpm;
+            bpm_state.borrow_mut().default_bpm = bpm;
+            loaded_module(lua)
+        })?,
+    )?;
+
+    let meter_state = Rc::clone(&state);
+    module.set(
+        "setDefaultMeter",
+        lua.create_function(move |lua, bar_length: f64| {
+            meter_state.borrow_mut().default_meter = bar_length;
+            loaded_module(lua)
+        })?,
+    )?;
+
+    let chords_state = Rc::clone(&state);
+    module.set(
+        "pushChords",
+        lua.create_function(move |lua, (chords, options): (Table, Table)| {
+            let chords = chords
+                .sequence_values::<Table>()
+                .map(|chord| parse_chord(&chord?))
+                .collect::<mlua::Result<Vec<_>>>()?;
+            let at = options.raw_get("at")?;
+            let times = options.raw_get("times")?;
+            chords_state
+                .borrow_mut()
+                .chord_sets
+                .push(ChordSet { chords, at, times });
             loaded_module(lua)
         })?,
     )?;
@@ -168,6 +219,21 @@ fn create_chord(lua: &Lua, pitches: Vec<String>, tuple: &Table) -> mlua::Result<
     chord.set("pitches", pitches_table)?;
     chord.set("duration", duration)?;
     Ok(chord)
+}
+
+fn parse_chord(chord: &Table) -> mlua::Result<Chord> {
+    let pitches = chord
+        .raw_get::<Table>("pitches")?
+        .sequence_values::<String>()
+        .collect::<mlua::Result<Vec<_>>>()?;
+    let duration = chord.raw_get::<Table>("duration")?;
+    Ok(Chord {
+        pitches,
+        duration: Duration {
+            length: duration.raw_get("length")?,
+            ratio: duration.raw_get("ratio")?,
+        },
+    })
 }
 
 fn validate_pitch(pitch: &str) -> mlua::Result<String> {
@@ -250,6 +316,8 @@ mod tests {
                     },
                 ],
                 default_bpm: 132.0,
+                default_meter: 4.0,
+                chord_sets: Vec::new(),
             }
         );
     }
@@ -321,5 +389,34 @@ mod tests {
 
         let error = execute_source(r#"o(bs9, {1})"#, "test.lua".into()).unwrap_err();
         assert!(error.to_string().contains("ends at octave 9"));
+    }
+
+    #[test]
+    fn collects_default_meter_and_pushed_chords() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.setDefaultMeter(1.25)
+                    .pushChords({n(c4, {1}), r({0.5})}, {at = 2, times = 3})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.default_meter, 1.25);
+        assert_eq!(state.chord_sets.len(), 1);
+        assert_eq!(state.chord_sets[0].at, 2.0);
+        assert_eq!(state.chord_sets[0].times, Some(3.0));
+        assert_eq!(
+            state.chord_sets[0].chords[0],
+            super::Chord {
+                pitches: vec!["c4".into()],
+                duration: super::Duration {
+                    length: 1.0,
+                    ratio: 1.0,
+                },
+            }
+        );
+        assert!(state.chord_sets[0].chords[1].pitches.is_empty());
     }
 }

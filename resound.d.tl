@@ -1,7 +1,20 @@
 global record ReSound
   -- All the methods chain
-  addInstrument: function(path: string): ReSound --parses the path into a name and type, based on file extension.
+
+  -- parses the path into a name and type, based on file extension.
+  addInstrument: function(path: string): ReSound
   setDefaultBpm: function(bpm: number): ReSound
+  -- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
+  setDefaultMeter: function(barLength: number): ReSound
+
+  -- Adds chords to the state. The sequencer is responsible for determining which bar each Chord falls
+  -- under, based on the starting bar (`PushChordsInput.at`) and the lengths of the preceding notes.
+  pushChords: function({Chord}, PushChordsInput): ReSound
+end
+
+global record PushChordsInput
+  at: number
+  times: number|nil
 end
 
 -- Define the internal state, managed in the ReSound Host.
@@ -29,7 +42,7 @@ global record Chord
 end
 
 global record Duration
-  --- How long the note lasts
+  --- How long the note lasts, in terms of quarter notes.
   length: number
   --- Fraction of how long to actually play the note for
   ratio: number
