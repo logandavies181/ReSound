@@ -139,7 +139,7 @@ fn perform(args: &[OsString]) -> Result<(), Box<dyn Error>> {
     let script_path = resolve_from(&project_dir, &script_path);
     let output_path = resolve_from(&project_dir, &output_path);
     let lua_state = luaapi::execute_file(&script_path)?;
-    let input = sequencer::sequence(lua_state, &project_dir, output_path);
+    let input = sequencer::sequence(lua_state, &project_dir, output_path)?;
     renderer::render(input)
 }
 
