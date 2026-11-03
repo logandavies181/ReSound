@@ -56,6 +56,7 @@ fn execute_source(source: &str, name: String) -> mlua::Result<LuaState> {
 
 fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
     install_pitch_globals(lua)?;
+    install_score_functions(lua)?;
     let module = lua.create_table()?;
 
     let instrument_state = Rc::clone(&state);
@@ -120,6 +121,83 @@ fn install_pitch_globals(lua: &Lua) -> mlua::Result<()> {
     }
 
     Ok(())
+}
+
+fn install_score_functions(lua: &Lua) -> mlua::Result<()> {
+    let globals = lua.globals();
+
+    globals.set(
+        "n",
+        lua.create_function(|lua, (pitch, duration): (String, Table)| {
+            create_chord(lua, vec![validate_pitch(&pitch)?], &duration)
+        })?,
+    )?;
+    globals.set(
+        "o",
+        lua.create_function(|lua, (pitch, duration): (String, Table)| {
+            let pitch = octave_above(&pitch)?;
+            create_chord(lua, vec![pitch], &duration)
+        })?,
+    )?;
+    globals.set(
+        "c",
+        lua.create_function(|lua, (pitches, duration): (Table, Table)| {
+            let pitches = pitches
+                .sequence_values::<String>()
+                .map(|pitch| validate_pitch(&pitch?))
+                .collect::<mlua::Result<Vec<_>>>()?;
+            create_chord(lua, pitches, &duration)
+        })?,
+    )?;
+    globals.set(
+        "r",
+        lua.create_function(|lua, duration: Table| create_chord(lua, Vec::new(), &duration))?,
+    )?;
+
+    Ok(())
+}
+
+fn create_chord(lua: &Lua, pitches: Vec<String>, tuple: &Table) -> mlua::Result<Table> {
+    let length: f64 = tuple.raw_get(1)?;
+    let ratio: Option<f64> = tuple.raw_get(2)?;
+    let pitches_table = lua.create_sequence_from(pitches)?;
+    let duration = lua.create_table()?;
+    duration.set("length", length)?;
+    duration.set("ratio", ratio.unwrap_or(1.0))?;
+    let chord = lua.create_table()?;
+    chord.set("pitches", pitches_table)?;
+    chord.set("duration", duration)?;
+    Ok(chord)
+}
+
+fn validate_pitch(pitch: &str) -> mlua::Result<String> {
+    if pitch_names().any(|name| name == pitch) {
+        Ok(pitch.to_owned())
+    } else {
+        Err(mlua::Error::RuntimeError(format!(
+            "unknown pitch name: {pitch}"
+        )))
+    }
+}
+
+fn octave_above(pitch: &str) -> mlua::Result<String> {
+    let pitch = validate_pitch(pitch)?;
+    let split = pitch
+        .find(|character: char| character.is_ascii_digit())
+        .expect("validated pitch has an octave");
+    let octave: u8 = pitch[split..]
+        .parse()
+        .expect("validated pitch has a numeric octave");
+    if octave == 9 {
+        return Err(mlua::Error::RuntimeError(format!(
+            "cannot raise {pitch} by an octave: pitch range ends at octave 9"
+        )));
+    }
+    Ok(format!(
+        "{}{next_octave}",
+        &pitch[..split],
+        next_octave = octave + 1
+    ))
 }
 
 pub(crate) fn pitch_names() -> impl Iterator<Item = String> {
@@ -206,5 +284,42 @@ mod tests {
             "test.lua".into(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn exposes_score_helpers_and_builds_chords() {
+        execute_source(
+            r#"
+                local note = n(c4, {2})
+                assert(note.pitches[1] == "c4")
+                assert(note.duration.length == 2)
+                assert(note.duration.ratio == 1)
+
+                local octave = o(bs8, {1, 0.5})
+                assert(octave.pitches[1] == "bs9")
+                assert(octave.duration.ratio == 0.5)
+
+                local chord = c({c4, e4, g4}, {4, 0.75})
+                assert(#chord.pitches == 3)
+                assert(chord.pitches[2] == "e4")
+                assert(chord.duration.length == 4)
+                assert(chord.duration.ratio == 0.75)
+
+                local rest = r({1})
+                assert(#rest.pitches == 0)
+                assert(rest.duration.length == 1)
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_pitch_names_and_octaving_past_range() {
+        let error = execute_source(r#"n("h4", {1})"#, "test.lua".into()).unwrap_err();
+        assert!(error.to_string().contains("unknown pitch name"));
+
+        let error = execute_source(r#"o(bs9, {1})"#, "test.lua".into()).unwrap_err();
+        assert!(error.to_string().contains("ends at octave 9"));
     }
 }

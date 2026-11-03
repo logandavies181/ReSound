@@ -23,6 +23,32 @@ global enum InstrumentType
   "vst"
 end
 
+global record Chord
+  pitches: {Pitch}
+  duration: Duration
+end
+
+global record Duration
+  --- How long the note lasts
+  length: number
+  --- Fraction of how long to actually play the note for
+  ratio: number
+end
+
+global type DurationTuple = {number, number|nil}
+
+--- Note
+global n: function(Pitch, DurationTuple): Chord -- Just the note.
+
+--- Octave
+global o: function(Pitch, DurationTuple): Chord -- The note and the same note one octave higher.
+
+--- Chord
+global c: function({Pitch}, DurationTuple): Chord -- Just the notes.
+
+--- Rest
+global r: function(DurationTuple): Chord -- No sounds, just used for adjusting timing.
+
 global enum Pitch
   "cb0"
   "c0"
@@ -234,18 +260,6 @@ global enum Pitch
   "bb9"
   "b9"
   "bs9"
-end
-
-global record Chord
-  pitches: {Pitch}
-  duration: Duration
-end
-
-global record Duration
-  --- How long the note lasts
-  length: number
-  --- Fraction of how long to actually play the note for
-  ratio: number
 end
 
 -- Midi note names. These are exposed as ambient variables by the ReSound Host.
