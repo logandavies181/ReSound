@@ -52,6 +52,10 @@ Load the relevant files as per the input. Also accept an argument for the output
 
 Orchestrate a subcommand hierarchy, defaulting to `perform` if the first arg ends with `.lua`.
 
+### init
+
+Creates `tlconfig.lua` and a complete `resound.d.tl` pitch declaration in the current directory. Existing files are not overwritten.
+
 ### perform
 
 #### Args

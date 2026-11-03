@@ -115,23 +115,24 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
 
 fn install_pitch_globals(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
-    globals.set("cb0", "cb0")?;
-
-    for octave in 0..=9 {
-        for pitch_class in ["c", "cs", "d", "ds", "e", "f", "fs", "g", "gs"] {
-            let pitch = format!("{pitch_class}{octave}");
-            globals.set(pitch.as_str(), pitch.as_str())?;
-        }
-
-        if octave < 9 {
-            for pitch_class in ["a", "as", "b"] {
-                let pitch = format!("{pitch_class}{octave}");
-                globals.set(pitch.as_str(), pitch.as_str())?;
-            }
-        }
+    for pitch in pitch_names() {
+        globals.set(pitch.as_str(), pitch.as_str())?;
     }
 
     Ok(())
+}
+
+pub(crate) fn pitch_names() -> impl Iterator<Item = String> {
+    const PITCH_CLASSES: [&str; 21] = [
+        "cb", "c", "cs", "db", "d", "ds", "eb", "e", "es", "fb", "f", "fs", "gb", "g", "gs", "ab",
+        "a", "as", "bb", "b", "bs",
+    ];
+
+    (0..=9).flat_map(|octave| {
+        PITCH_CLASSES
+            .into_iter()
+            .map(move |pitch_class| format!("{pitch_class}{octave}"))
+    })
 }
 
 fn loaded_module(lua: &Lua) -> mlua::Result<Table> {
@@ -193,12 +194,14 @@ mod tests {
                 assert(cb0 == "cb0")
                 assert(c0 == "c0")
                 assert(cs0 == "cs0")
+                assert(db0 == "db0")
+                assert(eb0 == "eb0")
                 assert(b0 == "b0")
                 assert(c1 == "c1")
                 assert(a1 == "a1")
                 assert(as1 == "as1")
                 assert(b1 == "b1")
-                assert(gs9 == "gs9")
+                assert(bs9 == "bs9")
             "#,
             "test.lua".into(),
         )

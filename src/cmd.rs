@@ -2,6 +2,8 @@ use std::{
     env,
     error::Error,
     ffi::OsString,
+    fs::{self, OpenOptions},
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -16,6 +18,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         }
         Some(first) if first.to_string_lossy().ends_with(".lua") => ("perform", &args[..]),
         Some(first) if first == "perform" => ("perform", &args[1..]),
+        Some(first) if first == "init" => ("init", &args[1..]),
         Some(first) if first == "--help" || first == "-h" => {
             print_usage();
             return Ok(());
@@ -27,7 +30,77 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     match command {
         "perform" => perform(command_args),
+        "init" => init(command_args),
         _ => unreachable!(),
+    }
+}
+
+fn init(args: &[OsString]) -> Result<(), Box<dyn Error>> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("Usage: resound init");
+        return Ok(());
+    }
+    if !args.is_empty() {
+        return Err("init accepts no arguments".into());
+    }
+
+    let project_dir = env::current_dir()?;
+    init_project(&project_dir)
+}
+
+fn init_project(project_dir: &Path) -> Result<(), Box<dyn Error>> {
+    let outputs = [
+        (
+            project_dir.join("tlconfig.lua"),
+            include_str!("../tlconfig.lua"),
+        ),
+        (
+            project_dir.join("resound.d.tl"),
+            include_str!("../resound.d.tl"),
+        ),
+    ];
+
+    for (path, _) in &outputs {
+        if path.try_exists()? {
+            return Err(format!("refusing to overwrite {}", path.display()).into());
+        }
+    }
+
+    let mut created = Vec::new();
+    for (path, contents) in outputs {
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                cleanup_created(&created, &error)?;
+                return Err(error.into());
+            }
+        };
+        created.push(path);
+        if let Err(error) = file.write_all(contents.as_bytes()) {
+            drop(file);
+            cleanup_created(&created, &error)?;
+            return Err(error.into());
+        }
+    }
+
+    println!("Created tlconfig.lua and resound.d.tl");
+    Ok(())
+}
+
+fn cleanup_created(paths: &[PathBuf], cause: &io::Error) -> io::Result<()> {
+    let mut cleanup_errors = Vec::new();
+    for path in paths {
+        if let Err(error) = fs::remove_file(path) {
+            cleanup_errors.push(format!("{}: {error}", path.display()));
+        }
+    }
+    if cleanup_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "{cause}; also failed to remove generated files: {}",
+            cleanup_errors.join(", ")
+        )))
     }
 }
 
@@ -80,5 +153,69 @@ fn resolve_from(base: &Path, path: &Path) -> PathBuf {
 
 fn print_usage() {
     println!("Usage: resound [perform] [FILE.lua] [-o|--output FILE.wav]");
+    println!("       resound init");
     println!("       resound -h|--help");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::init_project;
+
+    static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn init_creates_config_and_complete_pitch_declaration() {
+        let project_dir = temp_project_dir();
+        init_project(&project_dir).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(project_dir.join("tlconfig.lua")).unwrap(),
+            include_str!("../tlconfig.lua")
+        );
+        let declaration = fs::read_to_string(project_dir.join("resound.d.tl")).unwrap();
+        let pitches = declaration
+            .split("global enum Pitch")
+            .nth(1)
+            .unwrap()
+            .split("\nend")
+            .next()
+            .unwrap();
+        assert_eq!(pitches.matches("  \"").count(), 210);
+        assert!(declaration.contains("global cb0 = \"cb0\""));
+        assert!(declaration.contains("global bs9 = \"bs9\""));
+        assert!(!declaration.contains("And so on"));
+
+        fs::remove_dir_all(project_dir).unwrap();
+    }
+
+    #[test]
+    fn init_does_not_overwrite_existing_files() {
+        let project_dir = temp_project_dir();
+        fs::write(project_dir.join("resound.d.tl"), "existing").unwrap();
+
+        assert!(init_project(&project_dir).is_err());
+        assert!(!project_dir.join("tlconfig.lua").exists());
+        assert_eq!(
+            fs::read_to_string(project_dir.join("resound.d.tl")).unwrap(),
+            "existing"
+        );
+
+        fs::remove_dir_all(project_dir).unwrap();
+    }
+
+    fn temp_project_dir() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "resound-init-test-{}-{}",
+            std::process::id(),
+            NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
 }
