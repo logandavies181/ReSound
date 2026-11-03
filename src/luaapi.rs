@@ -55,6 +55,7 @@ fn execute_source(source: &str, name: String) -> mlua::Result<LuaState> {
 }
 
 fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
+    install_pitch_globals(lua)?;
     let module = lua.create_table()?;
 
     let instrument_state = Rc::clone(&state);
@@ -112,6 +113,27 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
     Ok(())
 }
 
+fn install_pitch_globals(lua: &Lua) -> mlua::Result<()> {
+    let globals = lua.globals();
+    globals.set("cb0", "cb0")?;
+
+    for octave in 0..=9 {
+        for pitch_class in ["c", "cs", "d", "ds", "e", "f", "fs", "g", "gs"] {
+            let pitch = format!("{pitch_class}{octave}");
+            globals.set(pitch.as_str(), pitch.as_str())?;
+        }
+
+        if octave < 9 {
+            for pitch_class in ["a", "as", "b"] {
+                let pitch = format!("{pitch_class}{octave}");
+                globals.set(pitch.as_str(), pitch.as_str())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn loaded_module(lua: &Lua) -> mlua::Result<Table> {
     let package: Table = lua.globals().get("package")?;
     let loaded: Table = package.get("loaded")?;
@@ -162,5 +184,24 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("unsupported instrument type"));
+    }
+
+    #[test]
+    fn exposes_pitch_names_as_global_values() {
+        execute_source(
+            r#"
+                assert(cb0 == "cb0")
+                assert(c0 == "c0")
+                assert(cs0 == "cs0")
+                assert(b0 == "b0")
+                assert(c1 == "c1")
+                assert(a1 == "a1")
+                assert(as1 == "as1")
+                assert(b1 == "b1")
+                assert(gs9 == "gs9")
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
     }
 }
