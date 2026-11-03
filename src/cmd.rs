@@ -10,7 +10,10 @@ use crate::{luaapi, renderer, sequencer};
 pub fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     let (command, command_args) = match args.first() {
-        None => ("perform", &args[..]),
+        None => {
+            print_usage();
+            return Ok(());
+        }
         Some(first) if first.to_string_lossy().ends_with(".lua") => ("perform", &args[..]),
         Some(first) if first == "perform" => ("perform", &args[1..]),
         Some(first) if first == "--help" || first == "-h" => {
