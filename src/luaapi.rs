@@ -2,45 +2,107 @@ use std::{cell::RefCell, error::Error, fs, path::Path, rc::Rc};
 
 use mlua::{Lua, Table};
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LuaState {
-    pub instrument_config: Option<String>,
+    pub instruments: Vec<InstrumentConfig>,
+    pub default_bpm: f64,
+}
+
+impl Default for LuaState {
+    fn default() -> Self {
+        Self {
+            instruments: Vec::new(),
+            default_bpm: 120.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstrumentConfig {
+    pub name: String,
+    pub r#type: InstrumentType,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InstrumentType {
+    Wav,
+    Vst,
+}
+
+impl InstrumentType {
+    fn from_extension(extension: &str) -> Option<Self> {
+        match extension {
+            "wav" => Some(Self::Wav),
+            "vst" | "vst3" => Some(Self::Vst),
+            _ => None,
+        }
+    }
 }
 
 pub fn execute_file(path: &Path) -> Result<LuaState, Box<dyn Error>> {
     let source = fs::read_to_string(path)?;
-    let lua = Lua::new();
-    let instrument_config = Rc::new(RefCell::new(None));
-    install_module(&lua, Rc::clone(&instrument_config))?;
-
-    lua.load(&source)
-        .set_name(path.to_string_lossy().into_owned())
-        .exec()?;
-
-    Ok(LuaState {
-        instrument_config: instrument_config.borrow().clone(),
-    })
+    execute_source(&source, path.to_string_lossy().into_owned()).map_err(Into::into)
 }
 
-fn install_module(lua: &Lua, config: Rc<RefCell<Option<String>>>) -> mlua::Result<()> {
+fn execute_source(source: &str, name: String) -> mlua::Result<LuaState> {
+    let lua = Lua::new();
+    let state = Rc::new(RefCell::new(LuaState::default()));
+    install_module(&lua, Rc::clone(&state))?;
+
+    lua.load(source).set_name(name).exec()?;
+
+    Ok(state.borrow().clone())
+}
+
+fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
     let module = lua.create_table()?;
 
-    let set_config = Rc::clone(&config);
+    let instrument_state = Rc::clone(&state);
     module.set(
-        "set",
-        lua.create_function(move |_, value: String| {
-            *set_config.borrow_mut() = Some(value);
-            Ok(())
+        "addInstrument",
+        lua.create_function(move |lua, path: String| {
+            let path = Path::new(&path);
+            let name = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!(
+                        "instrument path has no valid file name: {}",
+                        path.display()
+                    ))
+                })?;
+            let extension = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!(
+                        "instrument path has no file extension: {}",
+                        path.display()
+                    ))
+                })?;
+            let instrument_type = InstrumentType::from_extension(extension).ok_or_else(|| {
+                mlua::Error::RuntimeError(format!(
+                    "unsupported instrument type '{extension}' in path: {}",
+                    path.display()
+                ))
+            })?;
+
+            instrument_state
+                .borrow_mut()
+                .instruments
+                .push(InstrumentConfig {
+                    name: name.to_owned(),
+                    r#type: instrument_type,
+                });
+            loaded_module(lua)
         })?,
     )?;
 
     module.set(
-        "say",
-        lua.create_function(move |_, ()| {
-            if let Some(value) = config.borrow().as_ref() {
-                println!("{value}");
-            }
-            Ok(())
+        "setDefaultBpm",
+        lua.create_function(move |lua, bpm: f64| {
+            state.borrow_mut().default_bpm = bpm;
+            loaded_module(lua)
         })?,
     )?;
 
@@ -48,4 +110,57 @@ fn install_module(lua: &Lua, config: Rc<RefCell<Option<String>>>) -> mlua::Resul
     let loaded: Table = package.get("loaded")?;
     loaded.set("resound", module)?;
     Ok(())
+}
+
+fn loaded_module(lua: &Lua) -> mlua::Result<Table> {
+    let package: Table = lua.globals().get("package")?;
+    let loaded: Table = package.get("loaded")?;
+    loaded.get("resound")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InstrumentType, LuaState, execute_source};
+
+    #[test]
+    fn exposes_specified_chaining_api_and_collects_config() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument("samples/drums.wav")
+                    .addInstrument("plugins/synth.vst3")
+                    .setDefaultBpm(132)
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state,
+            LuaState {
+                instruments: vec![
+                    super::InstrumentConfig {
+                        name: "drums".into(),
+                        r#type: InstrumentType::Wav,
+                    },
+                    super::InstrumentConfig {
+                        name: "synth".into(),
+                        r#type: InstrumentType::Vst,
+                    },
+                ],
+                default_bpm: 132.0,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_instruments_with_unsupported_extensions() {
+        let error = execute_source(
+            r#"require("resound").addInstrument("plugins/synth.mp3")"#,
+            "test.lua".into(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unsupported instrument type"));
+    }
 }

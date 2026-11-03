@@ -13,6 +13,7 @@ const SAMPLE_RATE: f64 = 44_100.0;
 const BLOCK_SIZE: usize = 512;
 
 pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
+    let _ = &input.config;
     let (sample, sample_rate) = vst3_host::audio::read_wav(&input.sample.path)?;
     let mut plugin =
         simple::load_plugin_with_settings(&input.vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
@@ -33,7 +34,6 @@ fn render_score(
     sample: &[Vec<f32>],
     sample_rate: u32,
 ) -> Result<(), Box<dyn Error>> {
-    let _ = &input.instrument_config;
     let layout = plugin.audio_bus_layout()?;
     for (index, bus) in layout.outputs.iter().enumerate() {
         if !bus.active {

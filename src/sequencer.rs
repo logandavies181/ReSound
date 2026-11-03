@@ -25,7 +25,7 @@ pub fn sequence(
         sample: SampleInstrument {
             path: project_dir.join(SAMPLE_PATH),
         },
-        instrument_config: state.instrument_config,
+        config: state,
         render_duration_seconds: RENDER_LENGTH_SECONDS,
         score: vec![
             ScoreEvent::NoteOn {
