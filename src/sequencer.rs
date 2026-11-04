@@ -8,7 +8,6 @@ use crate::{
 const VST_PLUGIN_PATH: &str = "/usr/lib/vst3/Vital.vst3";
 const VST_PRESET_PATH: &str = "test.vital";
 const SAMPLE_PATH: &str = "snare.wav";
-const RENDER_LENGTH_SECONDS: f64 = 4.0;
 const VELOCITY: u8 = 100;
 
 pub fn sequence(
@@ -28,7 +27,7 @@ pub fn sequence(
             path: project_dir.join(SAMPLE_PATH),
         },
         config: state,
-        render_duration_seconds: RENDER_LENGTH_SECONDS.max(score_duration),
+        render_duration_seconds: score_duration,
         score,
     })
 }
