@@ -11,4 +11,5 @@ r.addInstrument("snare.wav")
     }, {at = 1})
     .pushChords("snare", {
         n(x, {1}),
+        n(x, {1}),
     }, {at = 1})

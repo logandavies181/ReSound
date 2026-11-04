@@ -6,7 +6,6 @@ use crate::{
 };
 use vst3_host::{PluginInfo, simple};
 
-const VST_PRESET_PATH: &str = "test.vital";
 const VELOCITY: u8 = 100;
 
 pub fn sequence(
@@ -15,26 +14,58 @@ pub fn sequence(
     output_path: impl Into<std::path::PathBuf>,
 ) -> Result<RendererInput, Box<dyn std::error::Error>> {
     let (score, score_duration) = sequence_score(&state)?;
-    let plugin_name = state
+    let vst_instrument = state
         .instruments
         .iter()
         .find(|instrument| instrument.r#type == InstrumentType::Vst)
-        .map(|instrument| instrument.name.as_str())
         .ok_or("no VST instrument configured")?;
+    let plugin_name = vst_plugin_name(vst_instrument);
     let plugin_path = select_vst_plugin(simple::discover_plugins()?, plugin_name)?;
+    let preset_path = vst_preset_path(vst_instrument, project_dir)?;
     let samples = collect_samples(&state.instruments, project_dir);
 
     Ok(RendererInput {
         output_path: output_path.into(),
         vst: VstInstrument {
             plugin_path,
-            preset_path: project_dir.join(VST_PRESET_PATH),
+            preset_path,
         },
         samples,
         config: state,
         render_duration_seconds: score_duration,
         score,
     })
+}
+
+fn vst_plugin_name(instrument: &crate::luaapi::InstrumentConfig) -> &str {
+    if instrument
+        .path
+        .extension()
+        .is_some_and(|extension| extension == "vital")
+    {
+        "Vital"
+    } else {
+        &instrument.name
+    }
+}
+
+fn vst_preset_path(
+    instrument: &crate::luaapi::InstrumentConfig,
+    project_dir: &Path,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    if instrument
+        .path
+        .extension()
+        .is_some_and(|extension| extension == "vital")
+    {
+        Ok(project_dir.join(&instrument.path))
+    } else {
+        Err(format!(
+            "VST instrument '{}' must use a .vital preset file",
+            instrument.name
+        )
+        .into())
+    }
 }
 
 fn collect_samples(
@@ -364,6 +395,37 @@ mod tests {
                 std::path::PathBuf::from("/project/samples/kick.wav"),
                 std::path::PathBuf::from("/project/drums/snare.wav")
             ]
+        );
+    }
+
+    #[test]
+    fn vital_preset_extension_selects_vital_and_uses_configured_preset_path() {
+        let instrument = InstrumentConfig {
+            name: "my-patch".into(),
+            path: "presets/my-patch.vital".into(),
+            r#type: InstrumentType::Vst,
+        };
+
+        assert_eq!(super::vst_plugin_name(&instrument), "Vital");
+        assert_eq!(
+            super::vst_preset_path(&instrument, std::path::Path::new("/project")).unwrap(),
+            std::path::PathBuf::from("/project/presets/my-patch.vital")
+        );
+    }
+
+    #[test]
+    fn errors_when_vst_instrument_does_not_specify_a_vital_preset() {
+        let instrument = InstrumentConfig {
+            name: "synth".into(),
+            path: "plugins/synth.vst3".into(),
+            r#type: InstrumentType::Vst,
+        };
+
+        assert_eq!(
+            super::vst_preset_path(&instrument, std::path::Path::new("/project"))
+                .unwrap_err()
+                .to_string(),
+            "VST instrument 'synth' must use a .vital preset file"
         );
     }
 

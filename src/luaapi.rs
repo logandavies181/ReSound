@@ -64,7 +64,7 @@ impl InstrumentType {
     fn from_extension(extension: &str) -> Option<Self> {
         match extension {
             "wav" => Some(Self::Wav),
-            "vst" | "vst3" => Some(Self::Vst),
+            "vst" | "vst3" | "vital" => Some(Self::Vst),
             _ => None,
         }
     }

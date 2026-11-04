@@ -186,7 +186,7 @@ mod tests {
             .split("\nend")
             .next()
             .unwrap();
-        assert_eq!(pitches.matches("  \"").count(), 210);
+        assert_eq!(pitches.matches("  \"").count(), 211);
         assert!(declaration.contains("global cb0 = \"cb0\""));
         assert!(declaration.contains("global bs9 = \"bs9\""));
         assert!(!declaration.contains("And so on"));
