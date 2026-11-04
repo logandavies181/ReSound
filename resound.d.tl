@@ -33,7 +33,7 @@ end
 
 global enum InstrumentType
   "wav"
-  "vst"
+  "vital"
 end
 
 global record Chord

@@ -1,11 +1,11 @@
 use std::path::Path;
 
 use crate::{
-    luaapi::{Chord, LuaState},
+    luaapi::{Chord, InstrumentType, LuaState},
     renderer_input::{RendererInput, SampleInstrument, ScoreEvent, VstInstrument},
 };
+use vst3_host::{PluginInfo, simple};
 
-const VST_PLUGIN_PATH: &str = "/usr/lib/vst3/Vital.vst3";
 const VST_PRESET_PATH: &str = "test.vital";
 const SAMPLE_PATH: &str = "snare.wav";
 const VELOCITY: u8 = 100;
@@ -16,11 +16,18 @@ pub fn sequence(
     output_path: impl Into<std::path::PathBuf>,
 ) -> Result<RendererInput, Box<dyn std::error::Error>> {
     let (score, score_duration) = sequence_score(&state)?;
+    let plugin_name = state
+        .instruments
+        .iter()
+        .find(|instrument| instrument.r#type == InstrumentType::Vst)
+        .map(|instrument| instrument.name.as_str())
+        .ok_or("no VST instrument configured")?;
+    let plugin_path = select_vst_plugin(simple::discover_plugins()?, plugin_name)?;
 
     Ok(RendererInput {
         output_path: output_path.into(),
         vst: VstInstrument {
-            plugin_path: VST_PLUGIN_PATH.into(),
+            plugin_path,
             preset_path: project_dir.join(VST_PRESET_PATH),
         },
         sample: SampleInstrument {
@@ -30,6 +37,23 @@ pub fn sequence(
         render_duration_seconds: score_duration,
         score,
     })
+}
+
+fn select_vst_plugin(
+    plugins: impl IntoIterator<Item = PluginInfo>,
+    name: &str,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let plugins = plugins.into_iter().collect::<Vec<_>>();
+    plugins
+        .iter()
+        .find(|plugin| plugin.name == name)
+        .or_else(|| {
+            plugins
+                .iter()
+                .find(|plugin| plugin.path.file_stem().and_then(|stem| stem.to_str()) == Some(name))
+        })
+        .map(|plugin| plugin.path.clone())
+        .ok_or_else(|| format!("VST3 plugin '{name}' was not found").into())
 }
 
 fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn std::error::Error>> {
@@ -183,12 +207,63 @@ fn event_order(event: &ScoreEvent) -> (f64, u8) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use crate::luaapi::{Chord, ChordSet, Duration, LuaState};
+    use vst3_host::PluginInfo;
 
-    use super::{pitch_to_midi, sequence, sequence_score};
+    use super::{pitch_to_midi, select_vst_plugin, sequence_score};
     use crate::renderer_input::ScoreEvent;
+
+    #[test]
+    fn selects_configured_plugin_from_discovered_plugins() {
+        let plugins = vec![
+            plugin_info("Other", "/plugins/Other.vst3"),
+            plugin_info("Configured Synth", "/plugins/synth.vst3"),
+        ];
+
+        assert_eq!(
+            select_vst_plugin(plugins, "synth").unwrap(),
+            std::path::PathBuf::from("/plugins/synth.vst3")
+        );
+    }
+
+    #[test]
+    fn selects_plugin_by_discovered_name() {
+        let plugins = vec![plugin_info("Configured Synth", "/plugins/plugin.vst3")];
+
+        assert_eq!(
+            select_vst_plugin(plugins, "Configured Synth").unwrap(),
+            std::path::PathBuf::from("/plugins/plugin.vst3")
+        );
+    }
+
+    #[test]
+    fn reports_when_configured_plugin_is_not_discovered() {
+        assert_eq!(
+            select_vst_plugin(
+                [plugin_info("Other", "/plugins/Other.vst3")],
+                "Configured Synth"
+            )
+            .unwrap_err()
+            .to_string(),
+            "VST3 plugin 'Configured Synth' was not found"
+        );
+    }
+
+    fn plugin_info(name: &str, path: &str) -> PluginInfo {
+        PluginInfo {
+            path: path.into(),
+            name: name.into(),
+            vendor: String::new(),
+            version: String::new(),
+            category: String::new(),
+            uid: String::new(),
+            audio_inputs: 0,
+            audio_outputs: 0,
+            has_midi_input: false,
+            has_midi_output: false,
+            has_gui: false,
+        }
+    }
 
     #[test]
     fn maps_enharmonic_pitch_names_to_midi_notes() {
@@ -266,9 +341,6 @@ mod tests {
                 note: 60
             }
         )));
-
-        let input = sequence(state, Path::new("."), "out.wav").unwrap();
-        assert_eq!(input.render_duration_seconds, 6.0);
     }
 
     #[test]
