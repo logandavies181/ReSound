@@ -36,5 +36,6 @@ pub enum ScoreEvent {
     },
     PlaySample {
         at_seconds: f64,
+        sample_index: usize,
     },
 }

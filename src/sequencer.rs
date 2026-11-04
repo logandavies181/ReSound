@@ -77,10 +77,44 @@ fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn st
 
     let seconds_per_quarter = 60.0 / state.default_bpm;
     let seconds_per_bar = state.default_meter * seconds_per_quarter;
-    let mut score = vec![ScoreEvent::PlaySample { at_seconds: 0.0 }];
+    let mut score = Vec::new();
     let mut score_duration: f64 = 0.0;
 
     for chord_set in &state.chord_sets {
+        let instrument_index = state
+            .instruments
+            .iter()
+            .position(|instrument| instrument.name == chord_set.instrument_name)
+            .ok_or_else(|| {
+                format!(
+                    "chord set references unknown instrument '{}'",
+                    chord_set.instrument_name
+                )
+            })?;
+        let instrument = &state.instruments[instrument_index];
+        if instrument.r#type == InstrumentType::Vst
+            && state
+                .instruments
+                .iter()
+                .find(|candidate| candidate.r#type == InstrumentType::Vst)
+                .is_some_and(|vst| vst.name != instrument.name)
+        {
+            return Err(format!(
+                "chord set targets VST instrument '{}', but only one VST instrument can currently be sequenced",
+                instrument.name
+            )
+            .into());
+        }
+        let sample_index = if instrument.r#type == InstrumentType::Wav {
+            Some(
+                state.instruments[..instrument_index]
+                    .iter()
+                    .filter(|candidate| candidate.r#type == InstrumentType::Wav)
+                    .count(),
+            )
+        } else {
+            None
+        };
         if !chord_set.at.is_finite() || chord_set.at < 1.0 || chord_set.at.fract() != 0.0 {
             return Err(format!(
                 "chord set bar must be a positive whole number, got {}",
@@ -128,16 +162,41 @@ fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn st
                     at_seconds + chord.duration.length * chord.duration.ratio * seconds_per_quarter;
                 if chord.duration.ratio > 0.0 {
                     for pitch in &chord.pitches {
-                        let note = pitch_to_midi(pitch)?;
-                        score.push(ScoreEvent::NoteOn {
-                            at_seconds,
-                            note,
-                            velocity: VELOCITY,
-                        });
-                        score.push(ScoreEvent::NoteOff {
-                            at_seconds: note_off_seconds,
-                            note,
-                        });
+                        match (instrument.r#type, pitch.as_str()) {
+                            (InstrumentType::Wav, "x") => {
+                                score.push(ScoreEvent::PlaySample {
+                                    at_seconds,
+                                    sample_index: sample_index
+                                        .ok_or("WAV instrument missing sample index")?,
+                                });
+                            }
+                            (InstrumentType::Wav, _) => {
+                                return Err(format!(
+                                    "WAV instrument '{}' only accepts the sample trigger pitch 'x'",
+                                    instrument.name
+                                )
+                                .into());
+                            }
+                            (InstrumentType::Vst, "x") => {
+                                return Err(format!(
+                                    "VST instrument '{}' does not accept the sample trigger pitch 'x'",
+                                    instrument.name
+                                )
+                                .into());
+                            }
+                            (InstrumentType::Vst, _) => {
+                                let note = pitch_to_midi(pitch)?;
+                                score.push(ScoreEvent::NoteOn {
+                                    at_seconds,
+                                    note,
+                                    velocity: VELOCITY,
+                                });
+                                score.push(ScoreEvent::NoteOff {
+                                    at_seconds: note_off_seconds,
+                                    note,
+                                });
+                            }
+                        }
                     }
                 }
                 beat_offset += chord.duration.length;
@@ -212,7 +271,7 @@ fn event_order(event: &ScoreEvent) -> (f64, u8) {
     match event {
         ScoreEvent::NoteOff { at_seconds, .. } => (*at_seconds, 0),
         ScoreEvent::NoteOn { at_seconds, .. } => (*at_seconds, 1),
-        ScoreEvent::PlaySample { at_seconds } => (*at_seconds, 2),
+        ScoreEvent::PlaySample { at_seconds, .. } => (*at_seconds, 2),
     }
 }
 
@@ -325,9 +384,15 @@ mod tests {
         let mut state = LuaState {
             default_bpm: 120.0,
             default_meter: 4.0,
+            instruments: vec![InstrumentConfig {
+                name: "synth".into(),
+                path: "synth.vst3".into(),
+                r#type: InstrumentType::Vst,
+            }],
             ..LuaState::default()
         };
         state.chord_sets.push(ChordSet {
+            instrument_name: "synth".into(),
             at: 2.0,
             times: Some(2.0),
             chords: vec![
@@ -397,7 +462,13 @@ mod tests {
         assert!(sequence_score(&state).is_err());
 
         state.default_meter = 4.0;
+        state.instruments.push(InstrumentConfig {
+            name: "synth".into(),
+            path: "synth.vst3".into(),
+            r#type: InstrumentType::Vst,
+        });
         state.chord_sets.push(ChordSet {
+            instrument_name: "synth".into(),
             at: 1.0,
             times: None,
             chords: vec![Chord {
@@ -412,9 +483,74 @@ mod tests {
     }
 
     #[test]
-    fn zero_gate_ratio_is_silent_but_advances_timeline() {
+    fn turns_x_pitches_into_events_for_the_named_wav_instrument() {
+        let state = LuaState {
+            instruments: vec![
+                InstrumentConfig {
+                    name: "kick".into(),
+                    path: "kick.wav".into(),
+                    r#type: InstrumentType::Wav,
+                },
+                InstrumentConfig {
+                    name: "snare".into(),
+                    path: "snare.wav".into(),
+                    r#type: InstrumentType::Wav,
+                },
+            ],
+            chord_sets: vec![ChordSet {
+                instrument_name: "snare".into(),
+                at: 2.0,
+                times: None,
+                chords: vec![Chord {
+                    pitches: vec!["x".into()],
+                    duration: Duration {
+                        length: 1.0,
+                        ratio: 1.0,
+                    },
+                }],
+            }],
+            ..LuaState::default()
+        };
+
+        let (score, duration) = sequence_score(&state).unwrap();
+        assert_eq!(duration, 2.5);
+        assert!(matches!(
+            score.as_slice(),
+            [ScoreEvent::PlaySample {
+                at_seconds: 2.0,
+                sample_index: 1
+            }]
+        ));
+    }
+
+    #[test]
+    fn rejects_chord_sets_with_unknown_instruments() {
         let state = LuaState {
             chord_sets: vec![ChordSet {
+                instrument_name: "missing".into(),
+                at: 1.0,
+                times: None,
+                chords: Vec::new(),
+            }],
+            ..LuaState::default()
+        };
+
+        assert_eq!(
+            sequence_score(&state).unwrap_err().to_string(),
+            "chord set references unknown instrument 'missing'"
+        );
+    }
+
+    #[test]
+    fn zero_gate_ratio_is_silent_but_advances_timeline() {
+        let state = LuaState {
+            instruments: vec![InstrumentConfig {
+                name: "synth".into(),
+                path: "synth.vst3".into(),
+                r#type: InstrumentType::Vst,
+            }],
+            chord_sets: vec![ChordSet {
+                instrument_name: "synth".into(),
                 at: 1.0,
                 times: None,
                 chords: vec![Chord {

@@ -44,9 +44,12 @@ any score data in the Lua state from the user's code and prepares it for the ren
 
 The VST is selected from discovered plugins using the name configured by `addInstrument()`. WAV files may also be added.
 
-Notes are based on the `pushChords()` function. Bars are automatically added as needed based on the output of the Lua
-State. Bars may be modified in terms of BPM and length in the future. For now they take on the default values as set in
-the user's Lua.
+Each `pushChords()` call names its target instrument. Pitches sent to a VST instrument become MIDI notes; WAV
+instruments are triggered with the special `x` pitch. Sample events play only the named WAV instrument, and instrument
+names must be unique.
+
+Bars are automatically added as needed based on the output of the Lua State. Bars may be modified in terms of BPM and
+length in the future. For now they take on the default values as set in the user's Lua.
 
 ## Renderer
 

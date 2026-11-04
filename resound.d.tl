@@ -1,15 +1,17 @@
 global record ReSound
   -- All the methods chain
 
-  -- parses the path into a name and type, based on file extension.
+  --- Parses the path into a name and type, based on file extension.
+  --- Instrument names must be unique.
   addInstrument: function(path: string): ReSound
   setDefaultBpm: function(bpm: number): ReSound
-  -- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
+  --- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
   setDefaultMeter: function(barLength: number): ReSound
 
   -- Adds chords to the state. The sequencer is responsible for determining which bar each Chord falls
   -- under, based on the starting bar (`PushChordsInput.at`) and the lengths of the preceding notes.
-  pushChords: function({Chord}, PushChordsInput): ReSound
+  -- The sequencer also must match the pushed notes against the correct instrument name.
+  pushChords: function(instrumentName: string, {Chord}, PushChordsInput): ReSound
 end
 
 global record PushChordsInput
@@ -21,6 +23,7 @@ end
 local record ReSoundConfig
   instruments: {InstrumentConfig}
   defaultBpm: number
+  defaultMeter: number
 end
 
 -- Not part of the API, just here to silence lsp warnings.
@@ -63,6 +66,10 @@ global c: function({Pitch}, DurationTuple): Chord -- Just the notes.
 global r: function(DurationTuple): Chord -- No sounds, just used for adjusting timing.
 
 global enum Pitch
+  -- an atonal percussion. mainly used to signal samples to play.
+  "x"
+
+  -- regular notes
   "cb0"
   "c0"
   "cs0"

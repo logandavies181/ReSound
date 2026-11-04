@@ -29,6 +29,7 @@ impl Default for LuaState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChordSet {
+    pub instrument_name: String,
     pub chords: Vec<Chord>,
     pub at: f64,
     pub times: Option<f64>,
@@ -53,7 +54,7 @@ pub struct InstrumentConfig {
     pub r#type: InstrumentType,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstrumentType {
     Wav,
     Vst,
@@ -119,14 +120,21 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
                 ))
             })?;
 
-            instrument_state
-                .borrow_mut()
+            let mut instrument_state = instrument_state.borrow_mut();
+            if instrument_state
                 .instruments
-                .push(InstrumentConfig {
-                    name: name.to_owned(),
-                    path: PathBuf::from(path),
-                    r#type: instrument_type,
-                });
+                .iter()
+                .any(|instrument| instrument.name == name)
+            {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "instrument name '{name}' is already configured"
+                )));
+            }
+            instrument_state.instruments.push(InstrumentConfig {
+                name: name.to_owned(),
+                path: PathBuf::from(path),
+                r#type: instrument_type,
+            });
             loaded_module(lua)
         })?,
     )?;
@@ -152,19 +160,23 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
     let chords_state = Rc::clone(&state);
     module.set(
         "pushChords",
-        lua.create_function(move |lua, (chords, options): (Table, Table)| {
-            let chords = chords
-                .sequence_values::<Table>()
-                .map(|chord| parse_chord(&chord?))
-                .collect::<mlua::Result<Vec<_>>>()?;
-            let at = options.raw_get("at")?;
-            let times = options.raw_get("times")?;
-            chords_state
-                .borrow_mut()
-                .chord_sets
-                .push(ChordSet { chords, at, times });
-            loaded_module(lua)
-        })?,
+        lua.create_function(
+            move |lua, (instrument_name, chords, options): (String, Table, Table)| {
+                let chords = chords
+                    .sequence_values::<Table>()
+                    .map(|chord| parse_chord(&chord?))
+                    .collect::<mlua::Result<Vec<_>>>()?;
+                let at = options.raw_get("at")?;
+                let times = options.raw_get("times")?;
+                chords_state.borrow_mut().chord_sets.push(ChordSet {
+                    instrument_name,
+                    chords,
+                    at,
+                    times,
+                });
+                loaded_module(lua)
+            },
+        )?,
     )?;
 
     let package: Table = lua.globals().get("package")?;
@@ -175,6 +187,7 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
 
 fn install_pitch_globals(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
+    globals.set("x", "x")?;
     for pitch in pitch_names() {
         globals.set(pitch.as_str(), pitch.as_str())?;
     }
@@ -245,7 +258,7 @@ fn parse_chord(chord: &Table) -> mlua::Result<Chord> {
 }
 
 fn validate_pitch(pitch: &str) -> mlua::Result<String> {
-    if pitch_names().any(|name| name == pitch) {
+    if pitch == "x" || pitch_names().any(|name| name == pitch) {
         Ok(pitch.to_owned())
     } else {
         Err(mlua::Error::RuntimeError(format!(
@@ -407,7 +420,7 @@ mod tests {
             r#"
                 local resound = require("resound")
                 resound.setDefaultMeter(1.25)
-                    .pushChords({n(c4, {1}), r({0.5})}, {at = 2, times = 3})
+                    .pushChords("synth", {n(c4, {1}), r({0.5})}, {at = 2, times = 3})
             "#,
             "test.lua".into(),
         )
@@ -416,6 +429,7 @@ mod tests {
         assert_eq!(state.default_meter, 1.25);
         assert_eq!(state.chord_sets.len(), 1);
         assert_eq!(state.chord_sets[0].at, 2.0);
+        assert_eq!(state.chord_sets[0].instrument_name, "synth");
         assert_eq!(state.chord_sets[0].times, Some(3.0));
         assert_eq!(
             state.chord_sets[0].chords[0],
@@ -428,5 +442,36 @@ mod tests {
             }
         );
         assert!(state.chord_sets[0].chords[1].pitches.is_empty());
+    }
+
+    #[test]
+    fn rejects_duplicate_instrument_names() {
+        let error = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument("samples/kick.wav")
+                    .addInstrument("other/kick.wav")
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("instrument name 'kick' is already configured")
+        );
+    }
+
+    #[test]
+    fn exposes_sample_trigger_pitch() {
+        execute_source(
+            r#"
+                assert(x == "x")
+                assert(n(x, {1}).pitches[1] == "x")
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
     }
 }

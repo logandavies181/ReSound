@@ -65,17 +65,14 @@ fn render_score(
         .score
         .iter()
         .filter_map(|event| match event {
-            ScoreEvent::PlaySample { at_seconds } => Some(
-                samples
-                    .iter()
-                    .map(|(sample, sample_rate)| {
-                        let frames = sample.iter().map(Vec::len).min().unwrap_or(0) as f64;
-                        let duration = frames / (*sample_rate).max(1) as f64;
-                        ((*at_seconds + duration) * output_sample_rate).ceil() as usize
-                    })
-                    .max()
-                    .unwrap_or(0),
-            ),
+            ScoreEvent::PlaySample {
+                at_seconds,
+                sample_index,
+            } => samples.get(*sample_index).map(|(sample, sample_rate)| {
+                let frames = sample.iter().map(Vec::len).min().unwrap_or(0) as f64;
+                let duration = frames / (*sample_rate).max(1) as f64;
+                ((*at_seconds + duration) * output_sample_rate).ceil() as usize
+            }),
             _ => None,
         })
         .max()
@@ -138,13 +135,14 @@ fn render_score(
             rendered = block_end;
         }
 
-        for (sample, sample_rate) in samples {
+        for (sample_index, (sample, sample_rate)) in samples.iter().enumerate() {
             mix_samples(
                 &mut channels,
                 sample,
                 *sample_rate,
                 output_sample_rate,
                 &input.score,
+                sample_index,
             )?;
         }
         write_wav(&input.output_path, &channels, output_sample_rate as u32)?;
@@ -180,6 +178,7 @@ fn mix_samples(
     sample_rate: u32,
     output_sample_rate: f64,
     score: &[ScoreEvent],
+    sample_index: usize,
 ) -> Result<(), Box<dyn Error>> {
     if sample_rate == 0 || !output_sample_rate.is_finite() || output_sample_rate <= 0.0 {
         return Err("sample rates must be greater than zero".into());
@@ -194,9 +193,16 @@ fn mix_samples(
 
     let rate_ratio = sample_rate as f64 / output_sample_rate;
     for event in score {
-        let ScoreEvent::PlaySample { at_seconds } = event else {
+        let ScoreEvent::PlaySample {
+            at_seconds,
+            sample_index: event_sample_index,
+        } = event
+        else {
             continue;
         };
+        if *event_sample_index != sample_index {
+            continue;
+        }
         let start_frame = event_frame(*at_seconds, output_sample_rate);
         for (output_channel, output_samples) in output.iter_mut().enumerate() {
             let sample_channel = if sample.len() == 1 {
@@ -231,14 +237,36 @@ mod tests {
 
     #[test]
     fn mixes_every_configured_sample_at_each_sample_event() {
-        let score = [ScoreEvent::PlaySample { at_seconds: 0.0 }];
+        let score = [
+            ScoreEvent::PlaySample {
+                at_seconds: 0.0,
+                sample_index: 0,
+            },
+            ScoreEvent::PlaySample {
+                at_seconds: 0.0,
+                sample_index: 1,
+            },
+        ];
         let mut output = vec![vec![0.0; 2]];
         let samples = [(vec![vec![0.25, 0.25]], 1), (vec![vec![0.5, 0.5]], 1)];
 
-        for (sample, sample_rate) in samples {
-            mix_samples(&mut output, &sample, sample_rate, 1.0, &score).unwrap();
+        for (sample_index, (sample, sample_rate)) in samples.into_iter().enumerate() {
+            mix_samples(&mut output, &sample, sample_rate, 1.0, &score, sample_index).unwrap();
         }
 
         assert_eq!(output, vec![vec![0.75, 0.75]]);
+    }
+
+    #[test]
+    fn mixes_only_the_sample_selected_by_an_event() {
+        let score = [ScoreEvent::PlaySample {
+            at_seconds: 0.0,
+            sample_index: 0,
+        }];
+        let mut output = vec![vec![0.0; 1]];
+
+        mix_samples(&mut output, &[vec![0.25]], 1, 1.0, &score, 1).unwrap();
+
+        assert_eq!(output, vec![vec![0.0]]);
     }
 }
