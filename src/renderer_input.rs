@@ -6,7 +6,7 @@ use crate::luaapi::LuaState;
 pub struct RendererInput {
     pub output_path: PathBuf,
     pub vst: VstInstrument,
-    pub sample: SampleInstrument,
+    pub samples: Vec<SampleInstrument>,
     pub config: LuaState,
     pub render_duration_seconds: f64,
     pub score: Vec<ScoreEvent>,

@@ -7,7 +7,6 @@ use crate::{
 use vst3_host::{PluginInfo, simple};
 
 const VST_PRESET_PATH: &str = "test.vital";
-const SAMPLE_PATH: &str = "snare.wav";
 const VELOCITY: u8 = 100;
 
 pub fn sequence(
@@ -23,6 +22,7 @@ pub fn sequence(
         .map(|instrument| instrument.name.as_str())
         .ok_or("no VST instrument configured")?;
     let plugin_path = select_vst_plugin(simple::discover_plugins()?, plugin_name)?;
+    let samples = collect_samples(&state.instruments, project_dir);
 
     Ok(RendererInput {
         output_path: output_path.into(),
@@ -30,13 +30,24 @@ pub fn sequence(
             plugin_path,
             preset_path: project_dir.join(VST_PRESET_PATH),
         },
-        sample: SampleInstrument {
-            path: project_dir.join(SAMPLE_PATH),
-        },
+        samples,
         config: state,
         render_duration_seconds: score_duration,
         score,
     })
+}
+
+fn collect_samples(
+    instruments: &[crate::luaapi::InstrumentConfig],
+    project_dir: &Path,
+) -> Vec<SampleInstrument> {
+    instruments
+        .iter()
+        .filter(|instrument| instrument.r#type == InstrumentType::Wav)
+        .map(|instrument| SampleInstrument {
+            path: project_dir.join(&instrument.path),
+        })
+        .collect()
 }
 
 fn select_vst_plugin(
@@ -207,10 +218,10 @@ fn event_order(event: &ScoreEvent) -> (f64, u8) {
 
 #[cfg(test)]
 mod tests {
-    use crate::luaapi::{Chord, ChordSet, Duration, LuaState};
+    use crate::luaapi::{Chord, ChordSet, Duration, InstrumentConfig, InstrumentType, LuaState};
     use vst3_host::PluginInfo;
 
-    use super::{pitch_to_midi, select_vst_plugin, sequence_score};
+    use super::{collect_samples, pitch_to_midi, select_vst_plugin, sequence_score};
     use crate::renderer_input::ScoreEvent;
 
     #[test]
@@ -263,6 +274,38 @@ mod tests {
             has_midi_output: false,
             has_gui: false,
         }
+    }
+
+    #[test]
+    fn collects_configured_wav_paths_and_ignores_vst_paths() {
+        let instruments = vec![
+            InstrumentConfig {
+                name: "kick".into(),
+                path: "samples/kick.wav".into(),
+                r#type: InstrumentType::Wav,
+            },
+            InstrumentConfig {
+                name: "synth".into(),
+                path: "plugins/synth.vst3".into(),
+                r#type: InstrumentType::Vst,
+            },
+            InstrumentConfig {
+                name: "snare".into(),
+                path: "drums/snare.wav".into(),
+                r#type: InstrumentType::Wav,
+            },
+        ];
+
+        assert_eq!(
+            collect_samples(&instruments, std::path::Path::new("/project"))
+                .into_iter()
+                .map(|sample| sample.path)
+                .collect::<Vec<_>>(),
+            vec![
+                std::path::PathBuf::from("/project/samples/kick.wav"),
+                std::path::PathBuf::from("/project/drums/snare.wav")
+            ]
+        );
     }
 
     #[test]

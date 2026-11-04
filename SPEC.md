@@ -42,8 +42,7 @@ Stdout/Stderr from the user's code is displayed as normal.
 The sequencer passes through config for the instruments to the renderer input unaltered from the Lua state and flattens
 any score data in the Lua state from the user's code and prepares it for the renderer.
 
-Instrument config is a placeholder for now: the sample uses the local .wav file, and the VST is
-selected from discovered plugins using the name configured by `addInstrument()`.
+The VST is selected from discovered plugins using the name configured by `addInstrument()`. WAV files may also be added.
 
 Notes are based on the `pushChords()` function. Bars are automatically added as needed based on the output of the Lua
 State. Bars may be modified in terms of BPM and length in the future. For now they take on the default values as set in

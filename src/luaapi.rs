@@ -1,4 +1,10 @@
-use std::{cell::RefCell, error::Error, fs, path::Path, rc::Rc};
+use std::{
+    cell::RefCell,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use mlua::{Lua, Table};
 
@@ -43,6 +49,7 @@ pub struct Duration {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstrumentConfig {
     pub name: String,
+    pub path: PathBuf,
     pub r#type: InstrumentType,
 }
 
@@ -86,29 +93,29 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
     module.set(
         "addInstrument",
         lua.create_function(move |lua, path: String| {
-            let path = Path::new(&path);
-            let name = path
+            let instrument_path = Path::new(&path);
+            let name = instrument_path
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| {
                     mlua::Error::RuntimeError(format!(
                         "instrument path has no valid file name: {}",
-                        path.display()
+                        instrument_path.display()
                     ))
                 })?;
-            let extension = path
+            let extension = instrument_path
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .ok_or_else(|| {
                     mlua::Error::RuntimeError(format!(
                         "instrument path has no file extension: {}",
-                        path.display()
+                        instrument_path.display()
                     ))
                 })?;
             let instrument_type = InstrumentType::from_extension(extension).ok_or_else(|| {
                 mlua::Error::RuntimeError(format!(
                     "unsupported instrument type '{extension}' in path: {}",
-                    path.display()
+                    instrument_path.display()
                 ))
             })?;
 
@@ -117,6 +124,7 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
                 .instruments
                 .push(InstrumentConfig {
                     name: name.to_owned(),
+                    path: PathBuf::from(path),
                     r#type: instrument_type,
                 });
             loaded_module(lua)
@@ -308,10 +316,12 @@ mod tests {
                 instruments: vec![
                     super::InstrumentConfig {
                         name: "drums".into(),
+                        path: "samples/drums.wav".into(),
                         r#type: InstrumentType::Wav,
                     },
                     super::InstrumentConfig {
                         name: "synth".into(),
+                        path: "plugins/synth.vst3".into(),
                         r#type: InstrumentType::Vst,
                     },
                 ],

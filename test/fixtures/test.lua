@@ -1,6 +1,7 @@
 local r = require('resound')
 
 r.addInstrument("snare.wav")
+    .addInstrument("test.vital")
     .setDefaultBpm(120)
     .setDefaultMeter(4)
     .pushChords({

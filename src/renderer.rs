@@ -14,7 +14,11 @@ const BLOCK_SIZE: usize = 512;
 
 pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     let _ = &input.config;
-    let (sample, sample_rate) = vst3_host::audio::read_wav(&input.sample.path)?;
+    let samples = input
+        .samples
+        .iter()
+        .map(|sample| vst3_host::audio::read_wav(&sample.path))
+        .collect::<vst3_host::Result<Vec<_>>>()?;
     let mut plugin =
         simple::load_plugin_with_settings(&input.vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
     let preset = fs::read(&input.vst.preset_path)?;
@@ -23,7 +27,7 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
         &StateContext::preset_from_path(&input.vst.preset_path),
     )?;
 
-    render_score(&mut plugin, &input, &sample, sample_rate)?;
+    render_score(&mut plugin, &input, &samples)?;
     println!("Wrote {}", input.output_path.display());
     Ok(())
 }
@@ -31,8 +35,7 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
 fn render_score(
     plugin: &mut Plugin,
     input: &RendererInput,
-    sample: &[Vec<f32>],
-    sample_rate: u32,
+    samples: &[(Vec<Vec<f32>>, u32)],
 ) -> Result<(), Box<dyn Error>> {
     let layout = plugin.audio_bus_layout()?;
     for (index, bus) in layout.outputs.iter().enumerate() {
@@ -62,11 +65,17 @@ fn render_score(
         .score
         .iter()
         .filter_map(|event| match event {
-            ScoreEvent::PlaySample { at_seconds } => {
-                let frames = sample.iter().map(Vec::len).min().unwrap_or(0) as f64;
-                let duration = frames / sample_rate.max(1) as f64;
-                Some(((*at_seconds + duration) * output_sample_rate).ceil() as usize)
-            }
+            ScoreEvent::PlaySample { at_seconds } => Some(
+                samples
+                    .iter()
+                    .map(|(sample, sample_rate)| {
+                        let frames = sample.iter().map(Vec::len).min().unwrap_or(0) as f64;
+                        let duration = frames / (*sample_rate).max(1) as f64;
+                        ((*at_seconds + duration) * output_sample_rate).ceil() as usize
+                    })
+                    .max()
+                    .unwrap_or(0),
+            ),
             _ => None,
         })
         .max()
@@ -129,13 +138,15 @@ fn render_score(
             rendered = block_end;
         }
 
-        mix_samples(
-            &mut channels,
-            sample,
-            sample_rate,
-            output_sample_rate,
-            &input.score,
-        )?;
+        for (sample, sample_rate) in samples {
+            mix_samples(
+                &mut channels,
+                sample,
+                *sample_rate,
+                output_sample_rate,
+                &input.score,
+            )?;
+        }
         write_wav(&input.output_path, &channels, output_sample_rate as u32)?;
         Ok(())
     })();
@@ -211,4 +222,23 @@ fn mix_samples(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mix_samples;
+    use crate::renderer_input::ScoreEvent;
+
+    #[test]
+    fn mixes_every_configured_sample_at_each_sample_event() {
+        let score = [ScoreEvent::PlaySample { at_seconds: 0.0 }];
+        let mut output = vec![vec![0.0; 2]];
+        let samples = [(vec![vec![0.25, 0.25]], 1), (vec![vec![0.5, 0.5]], 1)];
+
+        for (sample, sample_rate) in samples {
+            mix_samples(&mut output, &sample, sample_rate, 1.0, &score).unwrap();
+        }
+
+        assert_eq!(output, vec![vec![0.75, 0.75]]);
+    }
 }
