@@ -187,7 +187,6 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
 
 fn install_pitch_globals(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
-    globals.set("x", "x")?;
     for pitch in pitch_names() {
         globals.set(pitch.as_str(), pitch.as_str())?;
     }
@@ -293,11 +292,11 @@ pub(crate) fn pitch_names() -> impl Iterator<Item = String> {
         "a", "as", "bb", "b", "bs",
     ];
 
-    (0..=9).flat_map(|octave| {
+    std::iter::once("x".to_owned()).chain((0..=9).flat_map(|octave| {
         PITCH_CLASSES
             .into_iter()
             .map(move |pitch_class| format!("{pitch_class}{octave}"))
-    })
+    }))
 }
 
 fn loaded_module(lua: &Lua) -> mlua::Result<Table> {

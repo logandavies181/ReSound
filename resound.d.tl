@@ -283,6 +283,7 @@ global enum Pitch
 end
 
 -- Midi note names. These are exposed as ambient variables by the ReSound Host.
+global x = "x"
 global cb0 = "cb0"
 global c0 = "c0"
 global cs0 = "cs0"
