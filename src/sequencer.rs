@@ -13,7 +13,15 @@ pub fn sequence(
     output_path: impl Into<std::path::PathBuf>,
 ) -> Result<RendererInput, Box<dyn std::error::Error>> {
     let (score, score_duration) = sequence_score(&state)?;
-    let vst = crate::vst_loader::resolve(&state.instruments, project_dir)?;
+    let vst = state
+        .instruments
+        .iter()
+        .filter(|instrument| instrument.r#type == InstrumentType::Vst)
+        .map(|instrument| crate::vst_loader::resolve(instrument, project_dir))
+        .collect::<Result<Vec<_>, _>>()?;
+    if vst.is_empty() {
+        return Err("no VST instrument configured".into());
+    }
     let samples = collect_samples(&state.instruments, project_dir);
 
     Ok(RendererInput {
@@ -64,19 +72,12 @@ fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn st
                 )
             })?;
         let instrument = &state.instruments[instrument_index];
-        if instrument.r#type == InstrumentType::Vst
-            && state
-                .instruments
+        let vst_index = (instrument.r#type == InstrumentType::Vst).then(|| {
+            state.instruments[..instrument_index]
                 .iter()
-                .find(|candidate| candidate.r#type == InstrumentType::Vst)
-                .is_some_and(|vst| vst.name != instrument.name)
-        {
-            return Err(format!(
-                "chord set targets VST instrument '{}', but only one VST instrument can currently be sequenced",
-                instrument.name
-            )
-            .into());
-        }
+                .filter(|candidate| candidate.r#type == InstrumentType::Vst)
+                .count()
+        });
         let sample_index = if instrument.r#type == InstrumentType::Wav {
             Some(
                 state.instruments[..instrument_index]
@@ -160,11 +161,13 @@ fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn st
                                 let note = pitch_to_midi(pitch)?;
                                 score.push(ScoreEvent::NoteOn {
                                     at_seconds,
+                                    vst_index: vst_index.ok_or("VST instrument missing index")?,
                                     note,
                                     velocity: VELOCITY,
                                 });
                                 score.push(ScoreEvent::NoteOff {
                                     at_seconds: note_off_seconds,
+                                    vst_index: vst_index.ok_or("VST instrument missing index")?,
                                     note,
                                 });
                             }
@@ -365,9 +368,72 @@ mod tests {
             event,
             ScoreEvent::NoteOff {
                 at_seconds: 2.25,
-                note: 60
+                note: 60,
+                ..
             }
         )));
+    }
+
+    #[test]
+    fn routes_vst_notes_to_their_configured_instrument() {
+        let state = LuaState {
+            instruments: vec![
+                InstrumentConfig {
+                    name: "vital".into(),
+                    path: "vital.vital".into(),
+                    r#type: InstrumentType::Vst,
+                },
+                InstrumentConfig {
+                    name: "kick".into(),
+                    path: "kick.wav".into(),
+                    r#type: InstrumentType::Wav,
+                },
+                InstrumentConfig {
+                    name: "dexed".into(),
+                    path: "dexed.dexed".into(),
+                    r#type: InstrumentType::Vst,
+                },
+            ],
+            chord_sets: vec![
+                ChordSet {
+                    instrument_name: "vital".into(),
+                    at: 1.0,
+                    times: None,
+                    chords: vec![Chord {
+                        pitches: vec!["c4".into()],
+                        duration: Duration {
+                            length: 1.0,
+                            ratio: 1.0,
+                        },
+                    }],
+                },
+                ChordSet {
+                    instrument_name: "dexed".into(),
+                    at: 1.0,
+                    times: None,
+                    chords: vec![Chord {
+                        pitches: vec!["d4".into()],
+                        duration: Duration {
+                            length: 1.0,
+                            ratio: 1.0,
+                        },
+                    }],
+                },
+            ],
+            ..LuaState::default()
+        };
+
+        let (score, _) = sequence_score(&state).unwrap();
+        let note_ons = score
+            .iter()
+            .filter_map(|event| match event {
+                ScoreEvent::NoteOn {
+                    vst_index, note, ..
+                } => Some((*vst_index, *note)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(note_ons, vec![(0, 60), (1, 62)]);
     }
 
     #[test]

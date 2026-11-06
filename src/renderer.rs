@@ -19,24 +19,51 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
         .iter()
         .map(|sample| vst3_host::audio::read_wav(&sample.path))
         .collect::<vst3_host::Result<Vec<_>>>()?;
-    let mut plugin =
-        simple::load_plugin_with_settings(&input.vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
-    let preset = fs::read(&input.vst.preset_path)?;
-    plugin.load_state_with_context(
-        &preset,
-        &StateContext::preset_from_path(&input.vst.preset_path),
-    )?;
+    let mut rendered_plugins = Vec::with_capacity(input.vst.len());
+    for (vst_index, vst) in input.vst.iter().enumerate() {
+        let mut plugin =
+            simple::load_plugin_with_settings(&vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
+        let preset = fs::read(&vst.preset_path)?;
+        plugin
+            .load_state_with_context(&preset, &StateContext::preset_from_path(&vst.preset_path))?;
+        rendered_plugins.push(render_score(&mut plugin, vst_index, &input, &samples)?);
+    }
 
-    render_score(&mut plugin, &input, &samples)?;
+    let output_channels = rendered_plugins
+        .iter()
+        .map(Vec::len)
+        .max()
+        .ok_or("no VST instrument configured")?;
+    let total_frames = rendered_plugins
+        .iter()
+        .flat_map(|channels| channels.iter().map(Vec::len))
+        .max()
+        .unwrap_or(0);
+    let mut channels = vec![vec![0.0; total_frames]; output_channels];
+    for plugin_channels in rendered_plugins {
+        mix_channels(&mut channels, &plugin_channels);
+    }
+    for (sample_index, (sample, sample_rate)) in samples.iter().enumerate() {
+        mix_samples(
+            &mut channels,
+            sample,
+            *sample_rate,
+            SAMPLE_RATE,
+            &input.score,
+            sample_index,
+        )?;
+    }
+    write_wav(&input.output_path, &channels, SAMPLE_RATE as u32)?;
     println!("Wrote {}", input.output_path.display());
     Ok(())
 }
 
 fn render_score(
     plugin: &mut Plugin,
+    vst_index: usize,
     input: &RendererInput,
     samples: &[(Vec<Vec<f32>>, u32)],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
     let layout = plugin.audio_bus_layout()?;
     for (index, bus) in layout.outputs.iter().enumerate() {
         if !bus.active {
@@ -54,7 +81,11 @@ fn render_score(
         .score
         .iter()
         .filter_map(|event| match event {
-            ScoreEvent::NoteOff { at_seconds, .. } => {
+            ScoreEvent::NoteOff {
+                at_seconds,
+                vst_index: event_vst_index,
+                ..
+            } if *event_vst_index == vst_index => {
                 Some((*at_seconds * output_sample_rate).ceil() as usize)
             }
             _ => None,
@@ -82,7 +113,7 @@ fn render_score(
         .max(sample_end_frames);
 
     plugin.start_processing()?;
-    let render_result = (|| -> Result<(), Box<dyn Error>> {
+    let render_result = (|| -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
         let mut channels = vec![Vec::with_capacity(total_frames); output_channels];
         let mut rendered = 0;
         while rendered < total_frames {
@@ -93,9 +124,10 @@ fn render_score(
                 match *event {
                     ScoreEvent::NoteOn {
                         at_seconds,
+                        vst_index: event_vst_index,
                         note,
                         velocity,
-                    } => {
+                    } if event_vst_index == vst_index => {
                         send_midi_event(
                             plugin,
                             event_frame(at_seconds, output_sample_rate),
@@ -108,7 +140,11 @@ fn render_score(
                             },
                         )?;
                     }
-                    ScoreEvent::NoteOff { at_seconds, note } => {
+                    ScoreEvent::NoteOff {
+                        at_seconds,
+                        vst_index: event_vst_index,
+                        note,
+                    } if event_vst_index == vst_index => {
                         send_midi_event(
                             plugin,
                             event_frame(at_seconds, output_sample_rate),
@@ -121,7 +157,9 @@ fn render_score(
                             },
                         )?;
                     }
-                    ScoreEvent::PlaySample { .. } => {}
+                    ScoreEvent::NoteOn { .. }
+                    | ScoreEvent::NoteOff { .. }
+                    | ScoreEvent::PlaySample { .. } => {}
                 }
             }
 
@@ -135,24 +173,28 @@ fn render_score(
             rendered = block_end;
         }
 
-        for (sample_index, (sample, sample_rate)) in samples.iter().enumerate() {
-            mix_samples(
-                &mut channels,
-                sample,
-                *sample_rate,
-                output_sample_rate,
-                &input.score,
-                sample_index,
-            )?;
-        }
-        write_wav(&input.output_path, &channels, output_sample_rate as u32)?;
-        Ok(())
+        Ok(channels)
     })();
     let stop_result = plugin.stop_processing();
 
-    render_result?;
+    let channels = render_result?;
     stop_result?;
-    Ok(())
+    Ok(channels)
+}
+
+fn mix_channels(output: &mut [Vec<f32>], input: &[Vec<f32>]) {
+    for (output_channel, output_samples) in output.iter_mut().enumerate() {
+        let Some(input_samples) = input.get(if input.len() == 1 {
+            0
+        } else {
+            output_channel.min(input.len().saturating_sub(1))
+        }) else {
+            continue;
+        };
+        for (output_sample, input_sample) in output_samples.iter_mut().zip(input_samples) {
+            *output_sample += input_sample;
+        }
+    }
 }
 
 fn send_midi_event(

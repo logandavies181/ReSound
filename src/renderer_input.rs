@@ -5,7 +5,7 @@ use crate::luaapi::LuaState;
 #[derive(Debug)]
 pub struct RendererInput {
     pub output_path: PathBuf,
-    pub vst: VstInstrument,
+    pub vst: Vec<VstInstrument>,
     pub samples: Vec<SampleInstrument>,
     pub config: LuaState,
     pub render_duration_seconds: f64,
@@ -27,11 +27,13 @@ pub struct SampleInstrument {
 pub enum ScoreEvent {
     NoteOn {
         at_seconds: f64,
+        vst_index: usize,
         note: u8,
         velocity: u8,
     },
     NoteOff {
         at_seconds: f64,
+        vst_index: usize,
         note: u8,
     },
     PlaySample {

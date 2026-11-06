@@ -48,7 +48,7 @@ The sequencer passes through config for the instruments to the renderer input un
 any score data in the Lua state from the user's code and prepares it for the renderer.
 
 VST plugins are selected from discovered plugins using the instrument name configured by `addInstrument()`. The
-`.vital` and `.dexed` extensions select Vital and Dexed respectively. WAV files may also be added.
+`.vital` and `.dexed` extensions select Vital and Dexed respectively. Multiple VST and WAV instruments may be added.
 
 Each `pushChords()` call names its target instrument. Pitches sent to a VST instrument become MIDI notes; WAV
 instruments are triggered with the special `x` pitch. Sample events play only the named WAV instrument, and instrument

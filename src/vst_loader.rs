@@ -8,13 +8,12 @@ use crate::{
 };
 
 pub fn resolve(
-    instruments: &[InstrumentConfig],
+    instrument: &InstrumentConfig,
     project_dir: &Path,
 ) -> Result<VstInstrument, Box<dyn Error>> {
-    let instrument = instruments
-        .iter()
-        .find(|instrument| instrument.r#type == InstrumentType::Vst)
-        .ok_or("no VST instrument configured")?;
+    if instrument.r#type != InstrumentType::Vst {
+        return Err(format!("instrument '{}' is not a VST instrument", instrument.name).into());
+    }
     let plugin_name = plugin_name(instrument);
     let plugin_path = select_plugin(simple::discover_plugins()?, plugin_name)?;
     let preset_path = preset_path(instrument, project_dir)?;

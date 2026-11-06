@@ -11,9 +11,9 @@ r.addInstrument("test/fixtures/snare.wav")
         o(c2, {1}),
     }, {at = 1})
     .pushChords("test2", {
-        o(c2, {0.5}),
-        o(d2, {0.5}),
-        o(c2, {1}),
+        o(c4, {0.5}),
+        o(d4, {0.5}),
+        o(c4, {1}),
     }, {at = 2})
     .pushChords("snare", {
         n(x, {1}),
