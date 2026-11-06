@@ -3,7 +3,7 @@ global record ReSound
 
   --- Parses the path into a name and type, based on file extension. Optional volume is a linear 0..1 multiplier, default 1.
   --- Instrument names must be unique.
-  addInstrument: function(path: string, ? InstrumentConfigInput): ReSound
+  addInstrument: function(path: string, ?InstrumentConfigInput): ReSound
   setDefaultBpm: function(bpm: number): ReSound
   --- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
   setDefaultMeter: function(barLength: number): ReSound
@@ -69,19 +69,19 @@ end
 global type DurationTuple = {number, number|nil}
 
 --- Note
-global n: function(Pitch, DurationTuple, EffectFn|nil): Chord -- Just the note.
+global n: function(Pitch, DurationTuple, ?EffectFn): Chord -- Just the note.
 
 --- Octave
-global o: function(Pitch, DurationTuple, EffectFn|nil): Chord -- The note and the same note one octave higher.
+global o: function(Pitch, DurationTuple, ?EffectFn): Chord -- The note and the same note one octave higher.
 
 --- Chord
-global c: function({Pitch}, DurationTuple, EffectFn|nil): Chord -- Just the notes.
+global c: function({Pitch}, DurationTuple, ?EffectFn): Chord -- Just the notes.
 
 --- Percussion (sample)
-global p: function(DurationTuple, EffectFn|nil): Chord -- No pitch, just the "x".
+global p: function(DurationTuple, ?EffectFn): Chord -- No pitch, just the "x".
 
 --- Rest
-global r: function(DurationTuple, EffectFn|nil): Chord -- No sounds, just used for adjusting timing.
+global r: function(DurationTuple, ?EffectFn): Chord -- No sounds, just used for adjusting timing.
 
 global enum Pitch
   -- an atonal percussion. mainly used to signal samples to play.
