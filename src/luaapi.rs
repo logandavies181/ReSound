@@ -2,11 +2,12 @@ use std::{
     cell::RefCell,
     error::Error,
     fs,
+    ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
 };
 
-use mlua::{Lua, Table};
+use mlua::{Function, Lua, Table};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LuaState {
@@ -14,6 +15,40 @@ pub struct LuaState {
     pub default_bpm: f64,
     pub default_meter: f64,
     pub chord_sets: Vec<ChordSet>,
+}
+
+pub struct LuaExecution {
+    pub state: LuaState,
+    pub initial_parameter_values: Vec<ParameterValue>,
+    pub(crate) parameter_values: Rc<RefCell<Vec<ParameterValue>>>,
+    pub(crate) lua: Lua,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParameterValue {
+    pub instrument_name: String,
+    pub parameter_name: String,
+    pub value: f64,
+}
+
+impl Deref for LuaExecution {
+    type Target = LuaState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl std::fmt::Debug for LuaExecution {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.state.fmt(formatter)
+    }
+}
+
+impl PartialEq<LuaState> for LuaExecution {
+    fn eq(&self, other: &LuaState) -> bool {
+        self.state == *other
+    }
 }
 
 impl Default for LuaState {
@@ -39,6 +74,7 @@ pub struct ChordSet {
 pub struct Chord {
     pub pitches: Vec<String>,
     pub duration: Duration,
+    pub effect_fn: Option<Function>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,22 +106,34 @@ impl InstrumentType {
     }
 }
 
-pub fn execute_file(path: &Path) -> Result<LuaState, Box<dyn Error>> {
+pub fn execute_file(path: &Path) -> Result<LuaExecution, Box<dyn Error>> {
     let source = fs::read_to_string(path)?;
     execute_source(&source, path.to_string_lossy().into_owned()).map_err(Into::into)
 }
 
-fn execute_source(source: &str, name: String) -> mlua::Result<LuaState> {
+fn execute_source(source: &str, name: String) -> mlua::Result<LuaExecution> {
     let lua = Lua::new();
     let state = Rc::new(RefCell::new(LuaState::default()));
-    install_module(&lua, Rc::clone(&state))?;
+    let parameter_values = Rc::new(RefCell::new(Vec::new()));
+    install_module(&lua, Rc::clone(&state), Rc::clone(&parameter_values))?;
 
     lua.load(source).set_name(name).exec()?;
+    let state = state.borrow().clone();
+    let initial_parameter_values = parameter_values.borrow().clone();
 
-    Ok(state.borrow().clone())
+    Ok(LuaExecution {
+        state,
+        initial_parameter_values,
+        parameter_values,
+        lua,
+    })
 }
 
-fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
+fn install_module(
+    lua: &Lua,
+    state: Rc<RefCell<LuaState>>,
+    parameter_values: Rc<RefCell<Vec<ParameterValue>>>,
+) -> mlua::Result<()> {
     install_pitch_globals(lua)?;
     install_score_functions(lua)?;
     let module = lua.create_table()?;
@@ -157,6 +205,40 @@ fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
         })?,
     )?;
 
+    let parameter_state = Rc::clone(&state);
+    module.set(
+        "setParamValue",
+        lua.create_function(
+            move |lua, (instrument_name, parameter_name, value): (String, String, f64)| {
+                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "parameter value must be finite and between 0 and 1, got {value}"
+                    )));
+                }
+                let instruments = &parameter_state.borrow().instruments;
+                let instrument = instruments
+                    .iter()
+                    .find(|instrument| instrument.name == instrument_name)
+                    .ok_or_else(|| {
+                        mlua::Error::RuntimeError(format!(
+                            "parameter update references unknown instrument '{instrument_name}'"
+                        ))
+                    })?;
+                if instrument.r#type != InstrumentType::Vst {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "instrument '{instrument_name}' is not a VST instrument"
+                    )));
+                }
+                parameter_values.borrow_mut().push(ParameterValue {
+                    instrument_name,
+                    parameter_name,
+                    value,
+                });
+                loaded_module(lua)
+            },
+        )?,
+    )?;
+
     let chords_state = Rc::clone(&state);
     module.set(
         "pushChords",
@@ -199,42 +281,55 @@ fn install_score_functions(lua: &Lua) -> mlua::Result<()> {
 
     globals.set(
         "n",
-        lua.create_function(|lua, (pitch, duration): (String, Table)| {
-            create_chord(lua, vec![validate_pitch(&pitch)?], &duration)
-        })?,
+        lua.create_function(
+            |lua, (pitch, duration, effect_fn): (String, Table, Option<Function>)| {
+                create_chord(lua, vec![validate_pitch(&pitch)?], &duration, effect_fn)
+            },
+        )?,
     )?;
     globals.set(
         "o",
-        lua.create_function(|lua, (pitch, duration): (String, Table)| {
-            let pitch = octave_above(&pitch)?;
-            create_chord(lua, vec![pitch], &duration)
-        })?,
+        lua.create_function(
+            |lua, (pitch, duration, effect_fn): (String, Table, Option<Function>)| {
+                let pitch = octave_above(&pitch)?;
+                create_chord(lua, vec![pitch], &duration, effect_fn)
+            },
+        )?,
     )?;
     globals.set(
         "c",
-        lua.create_function(|lua, (pitches, duration): (Table, Table)| {
-            let pitches = pitches
-                .sequence_values::<String>()
-                .map(|pitch| validate_pitch(&pitch?))
-                .collect::<mlua::Result<Vec<_>>>()?;
-            create_chord(lua, pitches, &duration)
-        })?,
+        lua.create_function(
+            |lua, (pitches, duration, effect_fn): (Table, Table, Option<Function>)| {
+                let pitches = pitches
+                    .sequence_values::<String>()
+                    .map(|pitch| validate_pitch(&pitch?))
+                    .collect::<mlua::Result<Vec<_>>>()?;
+                create_chord(lua, pitches, &duration, effect_fn)
+            },
+        )?,
     )?;
     globals.set(
         "p",
-        lua.create_function(|lua, duration: Table| {
-            create_chord(lua, vec!["x".to_owned()], &duration)
+        lua.create_function(|lua, (duration, effect_fn): (Table, Option<Function>)| {
+            create_chord(lua, vec!["x".to_owned()], &duration, effect_fn)
         })?,
     )?;
     globals.set(
         "r",
-        lua.create_function(|lua, duration: Table| create_chord(lua, Vec::new(), &duration))?,
+        lua.create_function(|lua, (duration, effect_fn): (Table, Option<Function>)| {
+            create_chord(lua, Vec::new(), &duration, effect_fn)
+        })?,
     )?;
 
     Ok(())
 }
 
-fn create_chord(lua: &Lua, pitches: Vec<String>, tuple: &Table) -> mlua::Result<Table> {
+fn create_chord(
+    lua: &Lua,
+    pitches: Vec<String>,
+    tuple: &Table,
+    effect_fn: Option<Function>,
+) -> mlua::Result<Table> {
     let length: f64 = tuple.raw_get(1)?;
     let ratio: Option<f64> = tuple.raw_get(2)?;
     let pitches_table = lua.create_sequence_from(pitches)?;
@@ -244,6 +339,7 @@ fn create_chord(lua: &Lua, pitches: Vec<String>, tuple: &Table) -> mlua::Result<
     let chord = lua.create_table()?;
     chord.set("pitches", pitches_table)?;
     chord.set("duration", duration)?;
+    chord.set("effectFn", effect_fn)?;
     Ok(chord)
 }
 
@@ -259,6 +355,7 @@ fn parse_chord(chord: &Table) -> mlua::Result<Chord> {
             length: duration.raw_get("length")?,
             ratio: duration.raw_get("ratio")?,
         },
+        effect_fn: chord.raw_get("effectFn")?,
     })
 }
 
@@ -377,6 +474,89 @@ mod tests {
     }
 
     #[test]
+    fn set_param_value_records_initial_vst_parameter_values() {
+        let execution = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument("synth.vital")
+                    .setParamValue("synth", "lfo_rate", 0.75)
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            execution.initial_parameter_values,
+            vec![super::ParameterValue {
+                instrument_name: "synth".into(),
+                parameter_name: "lfo_rate".into(),
+                value: 0.75,
+            }]
+        );
+    }
+
+    #[test]
+    fn set_param_value_can_be_called_from_effect_fn() {
+        let execution = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument("synth.vital")
+                local effect = function(t, playing)
+                    resound.setParamValue("synth", "cutoff", playing and 0.8 or 0.1)
+                end
+                resound.pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+        let chord = &execution.state.chord_sets[0].chords[0];
+
+        chord
+            .effect_fn
+            .as_ref()
+            .unwrap()
+            .call::<()>((0.0, true))
+            .unwrap();
+        assert_eq!(
+            execution.parameter_values.borrow().last(),
+            Some(&super::ParameterValue {
+                instrument_name: "synth".into(),
+                parameter_name: "cutoff".into(),
+                value: 0.8,
+            })
+        );
+    }
+
+    #[test]
+    fn set_param_value_rejects_unknown_wav_and_out_of_range_targets() {
+        for (setup, call, expected) in [
+            (
+                "",
+                r#"resound.setParamValue("missing", "param", 0.5)"#,
+                "unknown instrument 'missing'",
+            ),
+            (
+                r#"resound.addInstrument("drums.wav")"#,
+                r#"resound.setParamValue("drums", "param", 0.5)"#,
+                "not a VST instrument",
+            ),
+            (
+                r#"resound.addInstrument("synth.vital")"#,
+                r#"resound.setParamValue("synth", "param", 1.5)"#,
+                "between 0 and 1",
+            ),
+        ] {
+            let source = format!(r#"local resound = require("resound"); {setup}; {call}"#);
+            assert!(
+                execute_source(&source, "test.lua".into())
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+    }
+
+    #[test]
     fn exposes_pitch_names_as_global_values() {
         execute_source(
             r#"
@@ -435,6 +615,31 @@ mod tests {
     }
 
     #[test]
+    fn stores_and_preserves_effect_fn_callbacks() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                local effect = function(t, playing)
+                    return t, playing
+                end
+                resound.addInstrument("synth.vital")
+                    .pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.chord_sets[0].chords[0].effect_fn.is_some(), true);
+        let result = state.chord_sets[0].chords[0]
+            .effect_fn
+            .as_ref()
+            .unwrap()
+            .call::<(f64, bool)>((-0.25, true))
+            .unwrap();
+        assert_eq!(result, (-0.25, true));
+    }
+
+    #[test]
     fn rejects_unknown_pitch_names_and_octaving_past_range() {
         let error = execute_source(r#"n("h4", {1})"#, "test.lua".into()).unwrap_err();
         assert!(error.to_string().contains("unknown pitch name"));
@@ -468,6 +673,7 @@ mod tests {
                     length: 1.0,
                     ratio: 1.0,
                 },
+                effect_fn: None,
             }
         );
         assert!(state.chord_sets[0].chords[1].pitches.is_empty());

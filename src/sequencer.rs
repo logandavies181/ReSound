@@ -1,18 +1,25 @@
 use std::path::Path;
 
 use crate::{
-    luaapi::{Chord, InstrumentType, LuaState},
-    renderer_input::{RendererInput, SampleInstrument, ScoreEvent},
+    luaapi::{Chord, InstrumentType, LuaExecution, LuaState},
+    renderer_input::{EffectSpan, RendererInput, SampleInstrument, ScoreEvent},
 };
 
 const VELOCITY: u8 = 100;
+type SequencedScore = (Vec<ScoreEvent>, f64, Vec<EffectSpan>);
 
 pub fn sequence(
-    state: LuaState,
+    execution: LuaExecution,
     project_dir: &Path,
     output_path: impl Into<std::path::PathBuf>,
 ) -> Result<RendererInput, Box<dyn std::error::Error>> {
-    let (score, score_duration) = sequence_score(&state)?;
+    let LuaExecution {
+        state,
+        initial_parameter_values,
+        parameter_values,
+        lua,
+    } = execution;
+    let (score, score_duration, effects) = sequence_score(&state)?;
     let vst = state
         .instruments
         .iter()
@@ -31,6 +38,10 @@ pub fn sequence(
         config: state,
         render_duration_seconds: score_duration,
         score,
+        effects,
+        initial_parameter_values,
+        parameter_values,
+        _lua: lua,
     })
 }
 
@@ -47,7 +58,7 @@ fn collect_samples(
         .collect()
 }
 
-fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn std::error::Error>> {
+fn sequence_score(state: &LuaState) -> Result<SequencedScore, Box<dyn std::error::Error>> {
     if !state.default_bpm.is_finite() || state.default_bpm <= 0.0 {
         return Err("default BPM must be finite and greater than zero".into());
     }
@@ -58,6 +69,7 @@ fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn st
     let seconds_per_quarter = 60.0 / state.default_bpm;
     let seconds_per_bar = state.default_meter * seconds_per_quarter;
     let mut score = Vec::new();
+    let mut effects = Vec::new();
     let mut score_duration: f64 = 0.0;
 
     for chord_set in &state.chord_sets {
@@ -133,6 +145,13 @@ fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn st
                 let at_seconds = start_seconds + beat_offset * seconds_per_quarter;
                 let note_off_seconds =
                     at_seconds + chord.duration.length * chord.duration.ratio * seconds_per_quarter;
+                if let Some(effect_fn) = &chord.effect_fn {
+                    effects.push(EffectSpan {
+                        start_seconds: at_seconds,
+                        playing_end_seconds: note_off_seconds,
+                        effect_fn: effect_fn.clone(),
+                    });
+                }
                 if chord.duration.ratio > 0.0 {
                     for pitch in &chord.pitches {
                         match (instrument.r#type, pitch.as_str()) {
@@ -187,7 +206,7 @@ fn sequence_score(state: &LuaState) -> Result<(Vec<ScoreEvent>, f64), Box<dyn st
             .then_with(|| left_priority.cmp(&right_priority))
     });
 
-    Ok((score, score_duration))
+    Ok((score, score_duration, effects))
 }
 
 fn validate_chord(chord: &Chord) -> Result<(), Box<dyn std::error::Error>> {
@@ -324,6 +343,7 @@ mod tests {
                         length: 1.0,
                         ratio: 0.5,
                     },
+                    effect_fn: None,
                 },
                 Chord {
                     pitches: Vec::new(),
@@ -331,6 +351,7 @@ mod tests {
                         length: 1.0,
                         ratio: 1.0,
                     },
+                    effect_fn: None,
                 },
                 Chord {
                     pitches: vec!["g4".into()],
@@ -338,11 +359,13 @@ mod tests {
                         length: 2.0,
                         ratio: 1.0,
                     },
+                    effect_fn: None,
                 },
             ],
         });
 
-        let (score, duration) = sequence_score(&state).unwrap();
+        let (score, duration, effects) = sequence_score(&state).unwrap();
+        assert!(effects.is_empty());
         assert_eq!(duration, 6.0);
         let midi_events = score
             .iter()
@@ -372,6 +395,41 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn schedules_effects_for_each_chord_repetition() {
+        let lua = mlua::Lua::new();
+        let effect_fn = lua.load("return function() end").eval().unwrap();
+        let state = LuaState {
+            default_bpm: 120.0,
+            default_meter: 4.0,
+            instruments: vec![InstrumentConfig {
+                name: "synth".into(),
+                path: "synth.vital".into(),
+                r#type: InstrumentType::Vst,
+            }],
+            chord_sets: vec![ChordSet {
+                instrument_name: "synth".into(),
+                at: 2.0,
+                times: Some(2.0),
+                chords: vec![Chord {
+                    pitches: vec!["c4".into()],
+                    duration: Duration {
+                        length: 1.0,
+                        ratio: 0.5,
+                    },
+                    effect_fn: Some(effect_fn),
+                }],
+            }],
+        };
+
+        let (_, _, effects) = sequence_score(&state).unwrap();
+        assert_eq!(effects.len(), 2);
+        assert_eq!(effects[0].start_seconds, 2.0);
+        assert_eq!(effects[0].playing_end_seconds, 2.25);
+        assert_eq!(effects[1].start_seconds, 2.5);
+        assert_eq!(effects[1].playing_end_seconds, 2.75);
     }
 
     #[test]
@@ -405,6 +463,7 @@ mod tests {
                             length: 1.0,
                             ratio: 1.0,
                         },
+                        effect_fn: None,
                     }],
                 },
                 ChordSet {
@@ -417,13 +476,14 @@ mod tests {
                             length: 1.0,
                             ratio: 1.0,
                         },
+                        effect_fn: None,
                     }],
                 },
             ],
             ..LuaState::default()
         };
 
-        let (score, _) = sequence_score(&state).unwrap();
+        let (score, _, _) = sequence_score(&state).unwrap();
         let note_ons = score
             .iter()
             .filter_map(|event| match event {
@@ -462,6 +522,7 @@ mod tests {
                     length: 1.0,
                     ratio: 1.0,
                 },
+                effect_fn: None,
             }],
         });
         assert!(sequence_score(&state).is_err());
@@ -492,12 +553,13 @@ mod tests {
                         length: 1.0,
                         ratio: 1.0,
                     },
+                    effect_fn: None,
                 }],
             }],
             ..LuaState::default()
         };
 
-        let (score, duration) = sequence_score(&state).unwrap();
+        let (score, duration, _) = sequence_score(&state).unwrap();
         assert_eq!(duration, 2.5);
         assert!(matches!(
             score.as_slice(),
@@ -544,11 +606,12 @@ mod tests {
                         length: 1.0,
                         ratio: 0.0,
                     },
+                    effect_fn: None,
                 }],
             }],
             ..LuaState::default()
         };
-        let (score, duration) = sequence_score(&state).unwrap();
+        let (score, duration, _) = sequence_score(&state).unwrap();
         assert_eq!(duration, 0.5);
         assert!(!score.iter().any(|event| matches!(
             event,
