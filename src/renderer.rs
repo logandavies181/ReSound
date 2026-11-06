@@ -7,7 +7,7 @@ use vst3_host::{
     simple,
 };
 
-use crate::renderer_input::{RendererInput, ScoreEvent};
+use crate::renderer_input::{EffectSpan, RendererInput, ScoreEvent};
 
 const SAMPLE_RATE: f64 = 44_100.0;
 const BLOCK_SIZE: usize = 512;
@@ -19,6 +19,7 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
         .iter()
         .map(|sample| vst3_host::audio::read_wav(&sample.path))
         .collect::<vst3_host::Result<Vec<_>>>()?;
+    run_effects(&input.effects, SAMPLE_RATE)?;
     let mut rendered_plugins = Vec::with_capacity(input.vst.len());
     for (vst_index, vst) in input.vst.iter().enumerate() {
         let mut plugin =
@@ -55,6 +56,54 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     }
     write_wav(&input.output_path, &channels, SAMPLE_RATE as u32)?;
     println!("Wrote {}", input.output_path.display());
+    Ok(())
+}
+
+fn run_effects(effects: &[EffectSpan], sample_rate: f64) -> Result<(), Box<dyn Error>> {
+    if effects.is_empty() {
+        return Ok(());
+    }
+
+    let mut scheduled = effects
+        .iter()
+        .map(|effect| {
+            (
+                ((effect.start_seconds - 1.0) * sample_rate).ceil() as i64,
+                (effect.playing_end_seconds * sample_rate).ceil() as i64,
+                effect,
+            )
+        })
+        .collect::<Vec<_>>();
+    scheduled.sort_by_key(|(start_frame, _, _)| *start_frame);
+
+    let mut active = Vec::new();
+    let mut next = 0;
+    let first_frame = scheduled[0].0;
+    let last_frame = scheduled
+        .iter()
+        .map(|(_, end_frame, _)| *end_frame)
+        .max()
+        .unwrap_or(first_frame);
+
+    for frame in first_frame..=last_frame {
+        while next < scheduled.len() && scheduled[next].0 <= frame {
+            active.push(next);
+            next += 1;
+        }
+
+        let time_seconds = frame as f64 / sample_rate;
+        for &index in &active {
+            let (_, end_frame, effect) = scheduled[index];
+            let playing = time_seconds >= effect.start_seconds
+                && frame < end_frame
+                && time_seconds < effect.playing_end_seconds;
+            effect
+                .effect_fn
+                .call::<()>((time_seconds - effect.start_seconds, playing))?;
+        }
+        active.retain(|&index| frame < scheduled[index].1);
+    }
+
     Ok(())
 }
 
@@ -274,8 +323,42 @@ fn mix_samples(
 
 #[cfg(test)]
 mod tests {
-    use super::mix_samples;
-    use crate::renderer_input::ScoreEvent;
+    use mlua::Lua;
+
+    use super::{mix_samples, run_effects};
+    use crate::renderer_input::{EffectSpan, ScoreEvent};
+
+    #[test]
+    fn evaluates_effect_each_sample_and_calls_once_after_gate() {
+        let lua = Lua::new();
+        let effect_fn = lua
+            .load("events = {}; return function(t, playing) table.insert(events, {t, playing}) end")
+            .eval()
+            .unwrap();
+        let effects = [EffectSpan {
+            start_seconds: 0.5,
+            playing_end_seconds: 1.0,
+            effect_fn,
+        }];
+
+        run_effects(&effects, 2.0).unwrap();
+
+        let events: mlua::Table = lua.globals().get("events").unwrap();
+        let calls = events
+            .sequence_values::<mlua::Table>()
+            .map(|call| {
+                let call = call.unwrap();
+                (
+                    call.raw_get::<f64>(1).unwrap(),
+                    call.raw_get::<bool>(2).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls,
+            vec![(-1.0, false), (-0.5, false), (0.0, true), (0.5, false)]
+        );
+    }
 
     #[test]
     fn mixes_every_configured_sample_at_each_sample_event() {

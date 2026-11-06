@@ -8,6 +8,8 @@ global record ReSound
   --- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
   setDefaultMeter: function(barLength: number): ReSound
 
+  setParamValue: function(instrumentName: string, paramName: string, value: number): ReSound
+
   -- Adds chords to the state. The sequencer is responsible for determining which bar each Chord falls
   -- under, based on the starting bar (`PushChordsInput.at`) and the lengths of the preceding notes.
   -- The sequencer also must match the pushed notes against the correct instrument name.
@@ -43,10 +45,12 @@ end
 global record Chord
   pitches: {Pitch}
   duration: Duration
-  effectFn: EffectFn
+  effectFn: EffectFn|nil
 end
 
-global type EffectFn = function()
+-- Called once per sample from one second before note start through gate end, then once with playing=false for cleanup.
+-- t is time since note start, starting at -1s.
+global type EffectFn = function(t: number, playing: boolean)
 
 global record Duration
   --- How long the note lasts, in terms of quarter notes.
@@ -58,19 +62,19 @@ end
 global type DurationTuple = {number, number|nil}
 
 --- Note
-global n: function(Pitch, DurationTuple): Chord -- Just the note.
+global n: function(Pitch, DurationTuple, EffectFn|nil): Chord -- Just the note.
 
 --- Octave
-global o: function(Pitch, DurationTuple): Chord -- The note and the same note one octave higher.
+global o: function(Pitch, DurationTuple, EffectFn|nil): Chord -- The note and the same note one octave higher.
 
 --- Chord
-global c: function({Pitch}, DurationTuple): Chord -- Just the notes.
+global c: function({Pitch}, DurationTuple, EffectFn|nil): Chord -- Just the notes.
 
 --- Percussion (sample)
-global p: function(DurationTuple): Chord -- No pitch, just the "x".
+global p: function(DurationTuple, EffectFn|nil): Chord -- No pitch, just the "x".
 
 --- Rest
-global r: function(DurationTuple): Chord -- No sounds, just used for adjusting timing.
+global r: function(DurationTuple, EffectFn|nil): Chord -- No sounds, just used for adjusting timing.
 
 global enum Pitch
   -- an atonal percussion. mainly used to signal samples to play.

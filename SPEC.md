@@ -46,6 +46,10 @@ The score helpers (`n`, `o`, `c`, `p`, and `r`) are global Lua functions. `p` cr
 using the special `x` pitch; `r` creates a silent rest. Avoid assigning the module to a local named `r`, which
 shadows the rest helper; prefer `local resound = require('resound')`.
 
+The score helpers accept an optional final `EffectFn` argument. When provided, it is called once per sample starting
+one second before the chord, with elapsed time `t` and `playing` set true only during the chord's gate. It is called
+once more after the gate with `playing` false for cleanup.
+
 ## Sequencer
 
 The sequencer passes through config for the instruments to the renderer input unaltered from the Lua state and flattens

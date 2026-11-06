@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
+use mlua::{Function, Lua};
+
 use crate::luaapi::LuaState;
 
-#[derive(Debug)]
 pub struct RendererInput {
     pub output_path: PathBuf,
     pub vst: Vec<VstInstrument>,
@@ -10,6 +11,15 @@ pub struct RendererInput {
     pub config: LuaState,
     pub render_duration_seconds: f64,
     pub score: Vec<ScoreEvent>,
+    pub effects: Vec<EffectSpan>,
+    pub(crate) _lua: Lua,
+}
+
+#[derive(Debug)]
+pub struct EffectSpan {
+    pub start_seconds: f64,
+    pub playing_end_seconds: f64,
+    pub effect_fn: Function,
 }
 
 #[derive(Debug)]

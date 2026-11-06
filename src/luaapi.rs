@@ -2,11 +2,12 @@ use std::{
     cell::RefCell,
     error::Error,
     fs,
+    ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
 };
 
-use mlua::{Lua, Table};
+use mlua::{Function, Lua, Table};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LuaState {
@@ -14,6 +15,31 @@ pub struct LuaState {
     pub default_bpm: f64,
     pub default_meter: f64,
     pub chord_sets: Vec<ChordSet>,
+}
+
+pub struct LuaExecution {
+    pub state: LuaState,
+    pub(crate) lua: Lua,
+}
+
+impl Deref for LuaExecution {
+    type Target = LuaState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl std::fmt::Debug for LuaExecution {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.state.fmt(formatter)
+    }
+}
+
+impl PartialEq<LuaState> for LuaExecution {
+    fn eq(&self, other: &LuaState) -> bool {
+        self.state == *other
+    }
 }
 
 impl Default for LuaState {
@@ -39,6 +65,7 @@ pub struct ChordSet {
 pub struct Chord {
     pub pitches: Vec<String>,
     pub duration: Duration,
+    pub effect_fn: Option<Function>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,19 +97,22 @@ impl InstrumentType {
     }
 }
 
-pub fn execute_file(path: &Path) -> Result<LuaState, Box<dyn Error>> {
+pub fn execute_file(path: &Path) -> Result<LuaExecution, Box<dyn Error>> {
     let source = fs::read_to_string(path)?;
     execute_source(&source, path.to_string_lossy().into_owned()).map_err(Into::into)
 }
 
-fn execute_source(source: &str, name: String) -> mlua::Result<LuaState> {
+fn execute_source(source: &str, name: String) -> mlua::Result<LuaExecution> {
     let lua = Lua::new();
     let state = Rc::new(RefCell::new(LuaState::default()));
     install_module(&lua, Rc::clone(&state))?;
 
     lua.load(source).set_name(name).exec()?;
 
-    Ok(state.borrow().clone())
+    Ok(LuaExecution {
+        state: state.borrow().clone(),
+        lua,
+    })
 }
 
 fn install_module(lua: &Lua, state: Rc<RefCell<LuaState>>) -> mlua::Result<()> {
@@ -199,42 +229,55 @@ fn install_score_functions(lua: &Lua) -> mlua::Result<()> {
 
     globals.set(
         "n",
-        lua.create_function(|lua, (pitch, duration): (String, Table)| {
-            create_chord(lua, vec![validate_pitch(&pitch)?], &duration)
-        })?,
+        lua.create_function(
+            |lua, (pitch, duration, effect_fn): (String, Table, Option<Function>)| {
+                create_chord(lua, vec![validate_pitch(&pitch)?], &duration, effect_fn)
+            },
+        )?,
     )?;
     globals.set(
         "o",
-        lua.create_function(|lua, (pitch, duration): (String, Table)| {
-            let pitch = octave_above(&pitch)?;
-            create_chord(lua, vec![pitch], &duration)
-        })?,
+        lua.create_function(
+            |lua, (pitch, duration, effect_fn): (String, Table, Option<Function>)| {
+                let pitch = octave_above(&pitch)?;
+                create_chord(lua, vec![pitch], &duration, effect_fn)
+            },
+        )?,
     )?;
     globals.set(
         "c",
-        lua.create_function(|lua, (pitches, duration): (Table, Table)| {
-            let pitches = pitches
-                .sequence_values::<String>()
-                .map(|pitch| validate_pitch(&pitch?))
-                .collect::<mlua::Result<Vec<_>>>()?;
-            create_chord(lua, pitches, &duration)
-        })?,
+        lua.create_function(
+            |lua, (pitches, duration, effect_fn): (Table, Table, Option<Function>)| {
+                let pitches = pitches
+                    .sequence_values::<String>()
+                    .map(|pitch| validate_pitch(&pitch?))
+                    .collect::<mlua::Result<Vec<_>>>()?;
+                create_chord(lua, pitches, &duration, effect_fn)
+            },
+        )?,
     )?;
     globals.set(
         "p",
-        lua.create_function(|lua, duration: Table| {
-            create_chord(lua, vec!["x".to_owned()], &duration)
+        lua.create_function(|lua, (duration, effect_fn): (Table, Option<Function>)| {
+            create_chord(lua, vec!["x".to_owned()], &duration, effect_fn)
         })?,
     )?;
     globals.set(
         "r",
-        lua.create_function(|lua, duration: Table| create_chord(lua, Vec::new(), &duration))?,
+        lua.create_function(|lua, (duration, effect_fn): (Table, Option<Function>)| {
+            create_chord(lua, Vec::new(), &duration, effect_fn)
+        })?,
     )?;
 
     Ok(())
 }
 
-fn create_chord(lua: &Lua, pitches: Vec<String>, tuple: &Table) -> mlua::Result<Table> {
+fn create_chord(
+    lua: &Lua,
+    pitches: Vec<String>,
+    tuple: &Table,
+    effect_fn: Option<Function>,
+) -> mlua::Result<Table> {
     let length: f64 = tuple.raw_get(1)?;
     let ratio: Option<f64> = tuple.raw_get(2)?;
     let pitches_table = lua.create_sequence_from(pitches)?;
@@ -244,6 +287,7 @@ fn create_chord(lua: &Lua, pitches: Vec<String>, tuple: &Table) -> mlua::Result<
     let chord = lua.create_table()?;
     chord.set("pitches", pitches_table)?;
     chord.set("duration", duration)?;
+    chord.set("effectFn", effect_fn)?;
     Ok(chord)
 }
 
@@ -259,6 +303,7 @@ fn parse_chord(chord: &Table) -> mlua::Result<Chord> {
             length: duration.raw_get("length")?,
             ratio: duration.raw_get("ratio")?,
         },
+        effect_fn: chord.raw_get("effectFn")?,
     })
 }
 
@@ -435,6 +480,31 @@ mod tests {
     }
 
     #[test]
+    fn stores_and_preserves_effect_fn_callbacks() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                local effect = function(t, playing)
+                    return t, playing
+                end
+                resound.addInstrument("synth.vital")
+                    .pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.chord_sets[0].chords[0].effect_fn.is_some(), true);
+        let result = state.chord_sets[0].chords[0]
+            .effect_fn
+            .as_ref()
+            .unwrap()
+            .call::<(f64, bool)>((-0.25, true))
+            .unwrap();
+        assert_eq!(result, (-0.25, true));
+    }
+
+    #[test]
     fn rejects_unknown_pitch_names_and_octaving_past_range() {
         let error = execute_source(r#"n("h4", {1})"#, "test.lua".into()).unwrap_err();
         assert!(error.to_string().contains("unknown pitch name"));
@@ -468,6 +538,7 @@ mod tests {
                     length: 1.0,
                     ratio: 1.0,
                 },
+                effect_fn: None,
             }
         );
         assert!(state.chord_sets[0].chords[1].pitches.is_empty());
