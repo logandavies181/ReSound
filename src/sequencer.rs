@@ -8,10 +8,11 @@ use crate::{
 const VELOCITY: u8 = 100;
 type SequencedScore = (Vec<ScoreEvent>, f64, Vec<EffectSpan>);
 
-pub fn sequence(
+pub fn sequence_from_bar(
     execution: LuaExecution,
     project_dir: &Path,
     output_path: impl Into<std::path::PathBuf>,
+    from_bar: u64,
 ) -> Result<RendererInput, Box<dyn std::error::Error>> {
     let LuaExecution {
         state,
@@ -19,7 +20,7 @@ pub fn sequence(
         parameter_values,
         lua,
     } = execution;
-    let (score, score_duration, effects) = sequence_score(&state)?;
+    let (score, score_duration, effects) = sequence_score_from_bar(&state, from_bar)?;
     let vst = state
         .instruments
         .iter()
@@ -58,7 +59,13 @@ fn collect_samples(
         .collect()
 }
 
-fn sequence_score(state: &LuaState) -> Result<SequencedScore, Box<dyn std::error::Error>> {
+fn sequence_score_from_bar(
+    state: &LuaState,
+    from_bar: u64,
+) -> Result<SequencedScore, Box<dyn std::error::Error>> {
+    if from_bar == 0 {
+        return Err("from-bar must be a positive whole number".into());
+    }
     if !state.default_bpm.is_finite() || state.default_bpm <= 0.0 {
         return Err("default BPM must be finite and greater than zero".into());
     }
@@ -68,6 +75,10 @@ fn sequence_score(state: &LuaState) -> Result<SequencedScore, Box<dyn std::error
 
     let seconds_per_quarter = 60.0 / state.default_bpm;
     let seconds_per_bar = state.default_meter * seconds_per_quarter;
+    let from_seconds = (from_bar as f64 - 1.0) * seconds_per_bar;
+    if !from_seconds.is_finite() {
+        return Err("from-bar exceeds the supported timeline".into());
+    }
     let mut score = Vec::new();
     let mut effects = Vec::new();
     let mut score_duration: f64 = 0.0;
@@ -137,7 +148,7 @@ fn sequence_score(state: &LuaState) -> Result<SequencedScore, Box<dyn std::error
         if !end_seconds.is_finite() {
             return Err("chord set extends beyond the supported timeline".into());
         }
-        score_duration = score_duration.max(end_seconds);
+        score_duration = score_duration.max(end_seconds - from_seconds);
 
         for repetition in 0..repetitions {
             let mut beat_offset = repetition as f64 * sequence_beats;
@@ -148,50 +159,54 @@ fn sequence_score(state: &LuaState) -> Result<SequencedScore, Box<dyn std::error
                 if !note_off_seconds.is_finite() {
                     return Err("chord gate extends beyond the supported timeline".into());
                 }
-                if let Some(effect_fn) = &chord.effect_fn {
-                    effects.push(EffectSpan {
-                        start_seconds: at_seconds,
-                        playing_end_seconds: note_off_seconds,
-                        effect_fn: effect_fn.clone(),
-                    });
-                }
-                if chord.duration.ratio > 0.0 {
-                    for pitch in &chord.pitches {
-                        match (instrument.r#type, pitch.as_str()) {
-                            (InstrumentType::Wav, "x") => {
-                                score.push(ScoreEvent::PlaySample {
-                                    at_seconds,
-                                    sample_index: sample_index
-                                        .ok_or("WAV instrument missing sample index")?,
-                                });
-                            }
-                            (InstrumentType::Wav, _) => {
-                                return Err(format!(
-                                    "WAV instrument '{}' only accepts the sample trigger pitch 'x'",
-                                    instrument.name
-                                )
-                                .into());
-                            }
-                            (InstrumentType::Vst, "x") => {
-                                return Err(format!(
-                                    "VST instrument '{}' does not accept the sample trigger pitch 'x'",
-                                    instrument.name
-                                )
-                                .into());
-                            }
-                            (InstrumentType::Vst, _) => {
-                                let note = pitch_to_midi(pitch)?;
-                                score.push(ScoreEvent::NoteOn {
-                                    at_seconds,
-                                    vst_index: vst_index.ok_or("VST instrument missing index")?,
-                                    note,
-                                    velocity: VELOCITY,
-                                });
-                                score.push(ScoreEvent::NoteOff {
-                                    at_seconds: note_off_seconds,
-                                    vst_index: vst_index.ok_or("VST instrument missing index")?,
-                                    note,
-                                });
+                if at_seconds >= from_seconds {
+                    if let Some(effect_fn) = &chord.effect_fn {
+                        effects.push(EffectSpan {
+                            start_seconds: at_seconds - from_seconds,
+                            playing_end_seconds: note_off_seconds - from_seconds,
+                            effect_fn: effect_fn.clone(),
+                        });
+                    }
+                    if chord.duration.ratio > 0.0 {
+                        for pitch in &chord.pitches {
+                            match (instrument.r#type, pitch.as_str()) {
+                                (InstrumentType::Wav, "x") => {
+                                    score.push(ScoreEvent::PlaySample {
+                                        at_seconds: at_seconds - from_seconds,
+                                        sample_index: sample_index
+                                            .ok_or("WAV instrument missing sample index")?,
+                                    });
+                                }
+                                (InstrumentType::Wav, _) => {
+                                    return Err(format!(
+                                        "WAV instrument '{}' only accepts the sample trigger pitch 'x'",
+                                        instrument.name
+                                    )
+                                    .into());
+                                }
+                                (InstrumentType::Vst, "x") => {
+                                    return Err(format!(
+                                        "VST instrument '{}' does not accept the sample trigger pitch 'x'",
+                                        instrument.name
+                                    )
+                                    .into());
+                                }
+                                (InstrumentType::Vst, _) => {
+                                    let note = pitch_to_midi(pitch)?;
+                                    score.push(ScoreEvent::NoteOn {
+                                        at_seconds: at_seconds - from_seconds,
+                                        vst_index: vst_index
+                                            .ok_or("VST instrument missing index")?,
+                                        note,
+                                        velocity: VELOCITY,
+                                    });
+                                    score.push(ScoreEvent::NoteOff {
+                                        at_seconds: note_off_seconds - from_seconds,
+                                        vst_index: vst_index
+                                            .ok_or("VST instrument missing index")?,
+                                        note,
+                                    });
+                                }
                             }
                         }
                     }
@@ -276,7 +291,7 @@ fn event_order(event: &ScoreEvent) -> (f64, u8) {
 mod tests {
     use crate::luaapi::{Chord, ChordSet, Duration, InstrumentConfig, InstrumentType, LuaState};
 
-    use super::{collect_samples, pitch_to_midi, sequence_score};
+    use super::{collect_samples, pitch_to_midi, sequence_score_from_bar};
     use crate::renderer_input::ScoreEvent;
 
     #[test]
@@ -367,7 +382,7 @@ mod tests {
             ],
         });
 
-        let (score, duration, effects) = sequence_score(&state).unwrap();
+        let (score, duration, effects) = sequence_score_from_bar(&state, 1).unwrap();
         assert!(effects.is_empty());
         assert_eq!(duration, 6.0);
         let midi_events = score
@@ -398,6 +413,82 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn starts_from_selected_bar_omitting_earlier_notes_and_shifting_timeline() {
+        let lua = mlua::Lua::new();
+        let effect_fn: mlua::Function = lua.load("return function() end").eval().unwrap();
+        let state = LuaState {
+            default_bpm: 120.0,
+            default_meter: 4.0,
+            instruments: vec![InstrumentConfig {
+                name: "synth".into(),
+                path: "synth.vital".into(),
+                r#type: InstrumentType::Vst,
+            }],
+            chord_sets: vec![
+                ChordSet {
+                    instrument_name: "synth".into(),
+                    at: 1.0,
+                    times: None,
+                    chords: vec![Chord {
+                        pitches: vec!["c4".into()],
+                        duration: Duration {
+                            length: 4.0,
+                            ratio: 2.0,
+                        },
+                        effect_fn: Some(effect_fn.clone()),
+                    }],
+                },
+                ChordSet {
+                    instrument_name: "synth".into(),
+                    at: 2.0,
+                    times: None,
+                    chords: vec![Chord {
+                        pitches: vec!["d4".into()],
+                        duration: Duration {
+                            length: 1.0,
+                            ratio: 1.0,
+                        },
+                        effect_fn: Some(effect_fn),
+                    }],
+                },
+            ],
+        };
+
+        let (score, duration, effects) = sequence_score_from_bar(&state, 2).unwrap();
+        assert_eq!(duration, 0.5);
+        assert_eq!(score.len(), 2);
+        assert!(matches!(
+            score[0],
+            ScoreEvent::NoteOn {
+                at_seconds: 0.0,
+                note: 62,
+                ..
+            }
+        ));
+        assert!(matches!(
+            score[1],
+            ScoreEvent::NoteOff {
+                at_seconds: 0.5,
+                note: 62,
+                ..
+            }
+        ));
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].start_seconds, 0.0);
+        assert_eq!(effects[0].playing_end_seconds, 0.5);
+    }
+
+    #[test]
+    fn rejects_zero_from_bar() {
+        assert_eq!(
+            sequence_score_from_bar(&LuaState::default(), 0)
+                .unwrap_err()
+                .to_string(),
+            "from-bar must be a positive whole number"
+        );
     }
 
     #[test]
@@ -435,7 +526,7 @@ mod tests {
             }],
         };
 
-        let (score, _, _) = sequence_score(&state).unwrap();
+        let (score, _, _) = sequence_score_from_bar(&state, 1).unwrap();
         let note_ons = score
             .iter()
             .filter_map(|event| match event {
@@ -486,7 +577,7 @@ mod tests {
             }],
         };
 
-        let (_, _, effects) = sequence_score(&state).unwrap();
+        let (_, _, effects) = sequence_score_from_bar(&state, 1).unwrap();
         assert_eq!(effects.len(), 2);
         assert_eq!(effects[0].start_seconds, 2.0);
         assert_eq!(effects[0].playing_end_seconds, 2.25);
@@ -545,7 +636,7 @@ mod tests {
             ..LuaState::default()
         };
 
-        let (score, _, _) = sequence_score(&state).unwrap();
+        let (score, _, _) = sequence_score_from_bar(&state, 1).unwrap();
         let note_ons = score
             .iter()
             .filter_map(|event| match event {
@@ -562,11 +653,11 @@ mod tests {
     fn rejects_invalid_meter_and_out_of_range_pitches() {
         let mut state = LuaState::default();
         state.default_bpm = 0.0;
-        assert!(sequence_score(&state).is_err());
+        assert!(sequence_score_from_bar(&state, 1).is_err());
 
         state.default_bpm = 120.0;
         state.default_meter = 0.0;
-        assert!(sequence_score(&state).is_err());
+        assert!(sequence_score_from_bar(&state, 1).is_err());
 
         state.default_meter = 4.0;
         state.instruments.push(InstrumentConfig {
@@ -587,7 +678,7 @@ mod tests {
                 effect_fn: None,
             }],
         });
-        assert!(sequence_score(&state).is_err());
+        assert!(sequence_score_from_bar(&state, 1).is_err());
     }
 
     #[test]
@@ -621,7 +712,7 @@ mod tests {
             ..LuaState::default()
         };
 
-        let (score, duration, _) = sequence_score(&state).unwrap();
+        let (score, duration, _) = sequence_score_from_bar(&state, 1).unwrap();
         assert_eq!(duration, 2.5);
         assert!(matches!(
             score.as_slice(),
@@ -645,7 +736,7 @@ mod tests {
         };
 
         assert_eq!(
-            sequence_score(&state).unwrap_err().to_string(),
+            sequence_score_from_bar(&state, 1).unwrap_err().to_string(),
             "chord set references unknown instrument 'missing'"
         );
     }
@@ -673,7 +764,7 @@ mod tests {
             }],
             ..LuaState::default()
         };
-        let (score, duration, _) = sequence_score(&state).unwrap();
+        let (score, duration, _) = sequence_score_from_bar(&state, 1).unwrap();
         assert_eq!(duration, 0.5);
         assert!(!score.iter().any(|event| matches!(
             event,

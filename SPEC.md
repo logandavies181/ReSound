@@ -98,3 +98,7 @@ File name - default to main.lua. File to read from.
 #### Options
 
 Output (o) - default to gen.wav. File to write to.
+
+From-Bar (`-f` / `--from-bar`) - positive whole bar number to start rendering from; defaults to bar 1.
+The output timeline starts at 0 for this bar. Events that begin before it are omitted, including notes that would
+otherwise ring into the selected bar.

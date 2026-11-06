@@ -109,11 +109,19 @@ fn cleanup_created(paths: &[PathBuf], cause: &io::Error) -> io::Result<()> {
 fn perform(args: &[OsString]) -> Result<(), Box<dyn Error>> {
     let mut script_path = PathBuf::from("main.lua");
     let mut output_path = PathBuf::from("gen.wav");
+    let mut from_bar = 1;
     let mut script_set = false;
     let mut index = 0;
 
     while index < args.len() {
         match args[index].to_str() {
+            Some("-f" | "--from-bar") => {
+                index += 1;
+                let Some(bar) = args.get(index) else {
+                    return Err("missing bar number after --from-bar".into());
+                };
+                from_bar = parse_from_bar(bar)?;
+            }
             Some("-o" | "--output") => {
                 index += 1;
                 let Some(path) = args.get(index) else {
@@ -141,8 +149,19 @@ fn perform(args: &[OsString]) -> Result<(), Box<dyn Error>> {
     let script_path = resolve_from(&project_dir, &script_path);
     let output_path = resolve_from(&project_dir, &output_path);
     let lua_state = luaapi::execute_file(&script_path)?;
-    let input = sequencer::sequence(lua_state, &project_dir, output_path)?;
+    let input = sequencer::sequence_from_bar(lua_state, &project_dir, output_path, from_bar)?;
     renderer::render(input)
+}
+
+fn parse_from_bar(value: &OsString) -> Result<u64, Box<dyn Error>> {
+    let bar = value
+        .to_str()
+        .ok_or("from-bar value must be a positive whole number")?
+        .parse::<u64>()?;
+    if bar == 0 {
+        return Err("from-bar value must be a positive whole number".into());
+    }
+    Ok(bar)
 }
 
 fn show_parameters(args: &[OsString]) -> Result<(), Box<dyn Error>> {
@@ -170,7 +189,7 @@ fn resolve_from(base: &Path, path: &Path) -> PathBuf {
 }
 
 fn print_usage() {
-    println!("Usage: resound [perform] [FILE.lua] [-o|--output FILE.wav]");
+    println!("Usage: resound [perform] [FILE.lua] [-o|--output FILE.wav] [-f|--from-bar BAR]");
     println!("       resound init");
     println!("       resound show-parameters FILE");
     println!("       resound -h|--help");
@@ -179,12 +198,13 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use std::{
+        ffi::OsString,
         fs,
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use super::init_project;
+    use super::{init_project, parse_from_bar};
 
     static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
 
@@ -226,6 +246,13 @@ mod tests {
         );
 
         fs::remove_dir_all(project_dir).unwrap();
+    }
+
+    #[test]
+    fn parses_from_bar_as_a_positive_whole_number() {
+        assert_eq!(parse_from_bar(&OsString::from("3")).unwrap(), 3);
+        assert!(parse_from_bar(&OsString::from("0")).is_err());
+        assert!(parse_from_bar(&OsString::from("1.5")).is_err());
     }
 
     fn temp_project_dir() -> PathBuf {

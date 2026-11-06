@@ -32,7 +32,8 @@ mod tests {
                 let output_path = outputs_dir
                     .join(fixture.file_stem().unwrap())
                     .with_extension("wav");
-                let input = sequencer::sequence(state, project_dir, output_path).unwrap();
+                let input =
+                    sequencer::sequence_from_bar(state, project_dir, output_path, 1).unwrap();
                 renderer::render(input).unwrap();
             }
         }
