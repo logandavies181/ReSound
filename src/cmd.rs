@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{luaapi, renderer, sequencer};
+use crate::{luaapi, renderer, sequencer, vst_loader};
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
@@ -19,6 +19,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Some(first) if first.to_string_lossy().ends_with(".lua") => ("perform", &args[..]),
         Some(first) if first == "perform" => ("perform", &args[1..]),
         Some(first) if first == "init" => ("init", &args[1..]),
+        Some(first) if first == "show-parameters" => ("show-parameters", &args[1..]),
         Some(first) if first == "--help" || first == "-h" => {
             print_usage();
             return Ok(());
@@ -31,6 +32,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     match command {
         "perform" => perform(command_args),
         "init" => init(command_args),
+        "show-parameters" => show_parameters(command_args),
         _ => unreachable!(),
     }
 }
@@ -143,6 +145,22 @@ fn perform(args: &[OsString]) -> Result<(), Box<dyn Error>> {
     renderer::render(input)
 }
 
+fn show_parameters(args: &[OsString]) -> Result<(), Box<dyn Error>> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("Usage: resound show-parameters FILE.vital");
+        return Ok(());
+    }
+    let [preset_path] = args else {
+        return Err("show-parameters requires one .vital preset file".into());
+    };
+
+    let preset_path = resolve_from(&env::current_dir()?, Path::new(preset_path));
+    for (name, value) in vst_loader::show_parameters(&preset_path)? {
+        println!("{name}: {value}");
+    }
+    Ok(())
+}
+
 fn resolve_from(base: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_owned()
@@ -154,6 +172,7 @@ fn resolve_from(base: &Path, path: &Path) -> PathBuf {
 fn print_usage() {
     println!("Usage: resound [perform] [FILE.lua] [-o|--output FILE.wav]");
     println!("       resound init");
+    println!("       resound show-parameters FILE.vital");
     println!("       resound -h|--help");
 }
 

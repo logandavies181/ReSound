@@ -42,7 +42,10 @@ end
 global record Chord
   pitches: {Pitch}
   duration: Duration
+  effectFn: EffectFn
 end
+
+global type EffectFn = function()
 
 global record Duration
   --- How long the note lasts, in terms of quarter notes.

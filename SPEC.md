@@ -12,6 +12,11 @@ Exposes functions the embedded Lua runtime.
 
 Parses the end state after the user's Lua code and builds out the input for the renderer.
 
+### src/vst_loader.rs
+
+Resolves the configured VST instrument to a discovered VST3 plugin and preset path. The renderer is responsible for
+instantiating the plugin and loading its preset.
+
 ### src/renderer_input.rs
 
 Shared type that sequencer creates and renderer consumes.
@@ -62,6 +67,14 @@ Orchestrate a subcommand hierarchy, defaulting to `perform` if the first arg end
 ### init
 
 Creates `tlconfig.lua` and a complete `resound.d.tl` pitch declaration in the current directory. Existing files are not overwritten.
+
+### show-parameters
+
+Loads the given VST3 preset file and displays its supported parameters with their current values.
+
+#### Args
+
+File name - required. Path to a VST3 preset; relative paths are resolved from the current directory.
 
 ### perform
 
