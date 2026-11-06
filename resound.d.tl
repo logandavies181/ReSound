@@ -49,8 +49,8 @@ global record Chord
   effectFn: EffectFn|nil
 end
 
--- Called once per sample from one second before note start through gate end, then once with playing=false for cleanup.
--- t is elapsed time in quarter notes since note start.
+-- Called once per sample from note start through gate end, then once with playing=false for cleanup.
+-- t is elapsed time in quarter notes since note start, starting at zero.
 global type EffectFn = function(t: number, playing: boolean)
 
 global record Duration

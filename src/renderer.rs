@@ -95,7 +95,7 @@ fn run_effects(
         .iter()
         .map(|effect| {
             (
-                ((effect.start_seconds - 1.0) * sample_rate).ceil() as i64,
+                (effect.start_seconds * sample_rate).ceil() as i64,
                 (effect.playing_end_seconds * sample_rate).ceil() as i64,
                 effect,
             )
@@ -415,10 +415,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            calls,
-            vec![(-2.0, false), (-1.0, false), (0.0, true), (1.0, false)]
-        );
+        assert_eq!(calls, vec![(0.0, true), (1.0, false)]);
     }
 
     #[test]
@@ -450,7 +447,7 @@ mod tests {
                 .iter()
                 .map(|timed| (timed.frame, timed.value.value))
                 .collect::<Vec<_>>(),
-            vec![(0, 0.1), (0, 0.1), (1, 0.8), (2, 0.1)]
+            vec![(1, 0.8), (2, 0.1)]
         );
     }
 

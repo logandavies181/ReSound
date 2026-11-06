@@ -47,8 +47,8 @@ using the special `x` pitch; `r` creates a silent rest. Avoid assigning the modu
 shadows the rest helper; prefer `local resound = require('resound')`.
 
 The score helpers accept an optional final `EffectFn` argument. When provided, it is called once per sample starting
-one second before the chord. `t` is elapsed time in quarter notes, and `playing` is true only during the chord's gate.
-The callback is called once more after the gate with `playing` false for cleanup.
+at the chord. `t` is elapsed time in quarter notes since chord start, beginning at zero, and `playing` is true only
+during the chord's gate. The callback is called once more after the gate with `playing` false for cleanup.
 
 ## Sequencer
 
