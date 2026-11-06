@@ -50,7 +50,7 @@ global record Chord
 end
 
 -- Called once per sample from one second before note start through gate end, then once with playing=false for cleanup.
--- t is time since note start, starting at -1s.
+-- t is elapsed time in quarter notes since note start.
 global type EffectFn = function(t: number, playing: boolean)
 
 global record Duration

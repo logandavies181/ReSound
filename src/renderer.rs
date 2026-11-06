@@ -23,6 +23,7 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     let parameter_values = run_effects(
         &input.effects,
         SAMPLE_RATE,
+        60.0 / input.config.default_bpm,
         &input.parameter_values,
         input.initial_parameter_values.len(),
     )?;
@@ -82,6 +83,7 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
 fn run_effects(
     effects: &[EffectSpan],
     sample_rate: f64,
+    seconds_per_quarter: f64,
     parameter_values: &std::cell::RefCell<Vec<crate::luaapi::ParameterValue>>,
     initial_count: usize,
 ) -> Result<Vec<TimedParameterValue>, Box<dyn Error>> {
@@ -124,9 +126,10 @@ fn run_effects(
             let playing = time_seconds >= effect.start_seconds
                 && frame < end_frame
                 && time_seconds < effect.playing_end_seconds;
-            effect
-                .effect_fn
-                .call::<()>((time_seconds - effect.start_seconds, playing))?;
+            effect.effect_fn.call::<()>((
+                (time_seconds - effect.start_seconds) / seconds_per_quarter,
+                playing,
+            ))?;
         }
         let current_values = parameter_values.borrow();
         for value in &current_values[next_parameter_value..] {
@@ -399,7 +402,7 @@ mod tests {
             effect_fn,
         }];
 
-        run_effects(&effects, 2.0, &std::cell::RefCell::new(Vec::new()), 0).unwrap();
+        run_effects(&effects, 2.0, 0.5, &std::cell::RefCell::new(Vec::new()), 0).unwrap();
 
         let events: mlua::Table = lua.globals().get("events").unwrap();
         let calls = events
@@ -414,7 +417,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             calls,
-            vec![(-1.0, false), (-0.5, false), (0.0, true), (0.5, false)]
+            vec![(-2.0, false), (-1.0, false), (0.0, true), (1.0, false)]
         );
     }
 
@@ -441,7 +444,7 @@ mod tests {
             effect_fn,
         }];
 
-        let timed_values = run_effects(&effects, 2.0, &parameter_values, 0).unwrap();
+        let timed_values = run_effects(&effects, 2.0, 0.5, &parameter_values, 0).unwrap();
         assert_eq!(
             timed_values
                 .iter()
