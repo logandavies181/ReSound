@@ -47,7 +47,8 @@ Stdout/Stderr from the user's code is displayed as normal.
 The sequencer passes through config for the instruments to the renderer input unaltered from the Lua state and flattens
 any score data in the Lua state from the user's code and prepares it for the renderer.
 
-The VST is selected from discovered plugins using the name configured by `addInstrument()`. WAV files may also be added.
+VST plugins are selected from discovered plugins using the instrument name configured by `addInstrument()`. The
+`.vital` and `.dexed` extensions select Vital and Dexed respectively. WAV files may also be added.
 
 Each `pushChords()` call names its target instrument. Pitches sent to a VST instrument become MIDI notes; WAV
 instruments are triggered with the special `x` pitch. Sample events play only the named WAV instrument, and instrument
@@ -70,11 +71,12 @@ Creates `tlconfig.lua` and a complete `resound.d.tl` pitch declaration in the cu
 
 ### show-parameters
 
-Loads the given VST3 preset file and displays its supported parameters with their current values.
+Loads the given Vital `.vital` or Dexed `.dexed` preset file and displays its supported parameters with their current
+values. The corresponding VST3 plugin must be installed and discoverable.
 
 #### Args
 
-File name - required. Path to a VST3 preset; relative paths are resolved from the current directory.
+File name - required. Path to a `.vital` or `.dexed` preset; relative paths are resolved from the current directory.
 
 ### perform
 

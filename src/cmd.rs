@@ -147,11 +147,11 @@ fn perform(args: &[OsString]) -> Result<(), Box<dyn Error>> {
 
 fn show_parameters(args: &[OsString]) -> Result<(), Box<dyn Error>> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("Usage: resound show-parameters FILE.vital");
+        println!("Usage: resound show-parameters FILE");
         return Ok(());
     }
     let [preset_path] = args else {
-        return Err("show-parameters requires one .vital preset file".into());
+        return Err("show-parameters requires one .vital or .dexed preset file".into());
     };
 
     let preset_path = resolve_from(&env::current_dir()?, Path::new(preset_path));
@@ -172,7 +172,7 @@ fn resolve_from(base: &Path, path: &Path) -> PathBuf {
 fn print_usage() {
     println!("Usage: resound [perform] [FILE.lua] [-o|--output FILE.wav]");
     println!("       resound init");
-    println!("       resound show-parameters FILE.vital");
+    println!("       resound show-parameters FILE");
     println!("       resound -h|--help");
 }
 

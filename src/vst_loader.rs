@@ -26,14 +26,9 @@ pub fn resolve(
 }
 
 pub fn show_parameters(preset_path: &Path) -> Result<Vec<(String, String)>, Box<dyn Error>> {
-    if !preset_path
-        .extension()
-        .is_some_and(|extension| extension == "vital")
-    {
-        return Err("show-parameters expects a .vital preset file".into());
-    }
-
-    let plugin_path = select_plugin(simple::discover_plugins()?, "Vital")?;
+    let plugin_name = preset_plugin_name(preset_path)
+        .ok_or("show-parameters expects a .vital or .dexed preset file")?;
+    let plugin_path = select_plugin(simple::discover_plugins()?, plugin_name)?;
     let mut plugin = simple::load_plugin_with_settings(plugin_path, 44_100.0, 512)?;
     let preset = fs::read(preset_path)?;
     plugin.load_state_with_context(&preset, &StateContext::preset_from_path(preset_path))?;
@@ -51,14 +46,14 @@ pub fn show_parameters(preset_path: &Path) -> Result<Vec<(String, String)>, Box<
 }
 
 fn plugin_name(instrument: &InstrumentConfig) -> &str {
-    if instrument
-        .path
-        .extension()
-        .is_some_and(|extension| extension == "vital")
-    {
-        "Vital"
-    } else {
-        &instrument.name
+    preset_plugin_name(&instrument.path).unwrap_or(&instrument.name)
+}
+
+fn preset_plugin_name(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()? {
+        "vital" => Some("Vital"),
+        "dexed" => Some("Dexed"),
+        _ => None,
     }
 }
 
@@ -66,15 +61,11 @@ fn preset_path(
     instrument: &InstrumentConfig,
     project_dir: &Path,
 ) -> Result<std::path::PathBuf, Box<dyn Error>> {
-    if instrument
-        .path
-        .extension()
-        .is_some_and(|extension| extension == "vital")
-    {
+    if preset_plugin_name(&instrument.path).is_some() {
         Ok(project_dir.join(&instrument.path))
     } else {
         Err(format!(
-            "VST instrument '{}' must use a .vital preset file",
+            "VST instrument '{}' must use a .vital or .dexed preset file",
             instrument.name
         )
         .into())
@@ -106,12 +97,12 @@ mod tests {
     use super::{plugin_name, preset_path, select_plugin, show_parameters};
 
     #[test]
-    fn show_parameters_rejects_non_vital_presets() {
+    fn show_parameters_rejects_unsupported_preset_files() {
         assert_eq!(
             show_parameters(std::path::Path::new("synth.vstpreset"))
                 .unwrap_err()
                 .to_string(),
-            "show-parameters expects a .vital preset file"
+            "show-parameters expects a .vital or .dexed preset file"
         );
     }
 
@@ -167,7 +158,22 @@ mod tests {
     }
 
     #[test]
-    fn errors_when_vst_instrument_does_not_specify_a_vital_preset() {
+    fn dexed_preset_selects_dexed_and_uses_configured_path() {
+        let instrument = InstrumentConfig {
+            name: "my-patch".into(),
+            path: "presets/my-patch.dexed".into(),
+            r#type: InstrumentType::Vst,
+        };
+
+        assert_eq!(plugin_name(&instrument), "Dexed");
+        assert_eq!(
+            preset_path(&instrument, std::path::Path::new("/project")).unwrap(),
+            std::path::PathBuf::from("/project/presets/my-patch.dexed")
+        );
+    }
+
+    #[test]
+    fn errors_when_vst_instrument_has_unsupported_preset_extension() {
         let instrument = InstrumentConfig {
             name: "synth".into(),
             path: "plugins/synth.vst3".into(),
@@ -178,7 +184,7 @@ mod tests {
             preset_path(&instrument, std::path::Path::new("/project"))
                 .unwrap_err()
                 .to_string(),
-            "VST instrument 'synth' must use a .vital preset file"
+            "VST instrument 'synth' must use a .vital or .dexed preset file"
         );
     }
 

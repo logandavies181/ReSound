@@ -64,7 +64,7 @@ impl InstrumentType {
     fn from_extension(extension: &str) -> Option<Self> {
         match extension {
             "wav" => Some(Self::Wav),
-            "vst" | "vst3" | "vital" => Some(Self::Vst),
+            "vst" | "vst3" | "vital" | "dexed" => Some(Self::Vst),
             _ => None,
         }
     }
@@ -353,6 +353,21 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("unsupported instrument type"));
+    }
+
+    #[test]
+    fn accepts_dexed_presets_as_vst_instruments() {
+        let state = execute_source(
+            r#"require("resound").addInstrument("presets/synth.dexed")"#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.instruments[0].r#type, InstrumentType::Vst);
+        assert_eq!(
+            state.instruments[0].path,
+            std::path::PathBuf::from("presets/synth.dexed")
+        );
     }
 
     #[test]

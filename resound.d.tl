@@ -37,6 +37,7 @@ end
 global enum InstrumentType
   "wav"
   "vital"
+  "dexed"
 end
 
 global record Chord
