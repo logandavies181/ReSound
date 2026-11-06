@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use mlua::{Function, Lua};
 
-use crate::luaapi::LuaState;
+use crate::luaapi::{LuaState, ParameterValue};
 
 pub struct RendererInput {
     pub output_path: PathBuf,
@@ -12,6 +12,8 @@ pub struct RendererInput {
     pub render_duration_seconds: f64,
     pub score: Vec<ScoreEvent>,
     pub effects: Vec<EffectSpan>,
+    pub initial_parameter_values: Vec<ParameterValue>,
+    pub(crate) parameter_values: std::rc::Rc<std::cell::RefCell<Vec<ParameterValue>>>,
     pub(crate) _lua: Lua,
 }
 
@@ -22,8 +24,15 @@ pub struct EffectSpan {
     pub effect_fn: Function,
 }
 
+#[derive(Clone, Debug)]
+pub struct TimedParameterValue {
+    pub frame: i64,
+    pub value: ParameterValue,
+}
+
 #[derive(Debug)]
 pub struct VstInstrument {
+    pub name: String,
     pub plugin_path: PathBuf,
     pub preset_path: PathBuf,
 }

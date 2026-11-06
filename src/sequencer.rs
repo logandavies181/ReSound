@@ -6,13 +6,19 @@ use crate::{
 };
 
 const VELOCITY: u8 = 100;
+type SequencedScore = (Vec<ScoreEvent>, f64, Vec<EffectSpan>);
 
 pub fn sequence(
     execution: LuaExecution,
     project_dir: &Path,
     output_path: impl Into<std::path::PathBuf>,
 ) -> Result<RendererInput, Box<dyn std::error::Error>> {
-    let LuaExecution { state, lua } = execution;
+    let LuaExecution {
+        state,
+        initial_parameter_values,
+        parameter_values,
+        lua,
+    } = execution;
     let (score, score_duration, effects) = sequence_score(&state)?;
     let vst = state
         .instruments
@@ -33,6 +39,8 @@ pub fn sequence(
         render_duration_seconds: score_duration,
         score,
         effects,
+        initial_parameter_values,
+        parameter_values,
         _lua: lua,
     })
 }
@@ -50,9 +58,7 @@ fn collect_samples(
         .collect()
 }
 
-fn sequence_score(
-    state: &LuaState,
-) -> Result<(Vec<ScoreEvent>, f64, Vec<EffectSpan>), Box<dyn std::error::Error>> {
+fn sequence_score(state: &LuaState) -> Result<SequencedScore, Box<dyn std::error::Error>> {
     if !state.default_bpm.is_finite() || state.default_bpm <= 0.0 {
         return Err("default BPM must be finite and greater than zero".into());
     }

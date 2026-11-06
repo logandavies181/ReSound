@@ -19,6 +19,7 @@ pub fn resolve(
     let preset_path = preset_path(instrument, project_dir)?;
 
     Ok(VstInstrument {
+        name: instrument.name.clone(),
         plugin_path,
         preset_path,
     })

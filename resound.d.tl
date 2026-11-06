@@ -8,6 +8,7 @@ global record ReSound
   --- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
   setDefaultMeter: function(barLength: number): ReSound
 
+  --- Value is normalized to the inclusive 0..1 range. May also be called from EffectFn for per-sample automation.
   setParamValue: function(instrumentName: string, paramName: string, value: number): ReSound
 
   -- Adds chords to the state. The sequencer is responsible for determining which bar each Chord falls
