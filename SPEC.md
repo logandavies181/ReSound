@@ -42,6 +42,9 @@ See [resound.d.tl](./resound.d.tl)
 
 Stdout/Stderr from the user's code is displayed as normal.
 
+The score helpers (`n`, `o`, `c`, and `r`) are global Lua functions. Avoid assigning the module to a local named `r`,
+which shadows the rest helper; prefer `local resound = require('resound')`.
+
 ## Sequencer
 
 The sequencer passes through config for the instruments to the renderer input unaltered from the Lua state and flattens

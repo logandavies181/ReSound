@@ -395,6 +395,7 @@ mod tests {
     fn exposes_score_helpers_and_builds_chords() {
         execute_source(
             r#"
+                local resound = require("resound")
                 local note = n(c4, {2})
                 assert(note.pitches[1] == "c4")
                 assert(note.duration.length == 2)
@@ -413,6 +414,9 @@ mod tests {
                 local rest = r({1})
                 assert(#rest.pitches == 0)
                 assert(rest.duration.length == 1)
+
+                resound.addInstrument("synth.vital")
+                    .pushChords("synth", {rest}, {at = 1})
             "#,
             "test.lua".into(),
         )

@@ -1,6 +1,6 @@
-local r = require('resound')
+local resound = require('resound')
 
-r.addInstrument("test/fixtures/snare.wav")
+resound.addInstrument("test/fixtures/snare.wav")
     .addInstrument("test/fixtures/test.vital")
     .addInstrument("test/fixtures/test2.dexed")
     .setDefaultBpm(120)
@@ -14,6 +14,7 @@ r.addInstrument("test/fixtures/snare.wav")
         o(c4, {0.5}),
         o(d4, {0.5}),
         o(c4, {1}),
+        r({1}),
     }, {at = 2})
     .pushChords("snare", {
         n(x, {1}),
