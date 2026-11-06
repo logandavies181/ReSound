@@ -22,6 +22,7 @@ pub fn resolve(
         name: instrument.name.clone(),
         plugin_path,
         preset_path,
+        volume: instrument.volume,
     })
 }
 
@@ -148,6 +149,7 @@ mod tests {
             name: "my-patch".into(),
             path: "presets/my-patch.vital".into(),
             r#type: InstrumentType::Vst,
+            volume: 1.0,
         };
 
         assert_eq!(plugin_name(&instrument), "Vital");
@@ -163,6 +165,7 @@ mod tests {
             name: "my-patch".into(),
             path: "presets/my-patch.dexed".into(),
             r#type: InstrumentType::Vst,
+            volume: 1.0,
         };
 
         assert_eq!(plugin_name(&instrument), "Dexed");
@@ -178,6 +181,7 @@ mod tests {
             name: "synth".into(),
             path: "plugins/synth.vst3".into(),
             r#type: InstrumentType::Vst,
+            volume: 1.0,
         };
 
         assert_eq!(

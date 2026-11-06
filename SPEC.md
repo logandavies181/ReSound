@@ -62,6 +62,9 @@ Each `pushChords()` call names its target instrument. Pitches sent to a VST inst
 instruments are triggered with the special `x` pitch. Sample events play only the named WAV instrument, and instrument
 names must be unique.
 
+`addInstrument(path, { volume = value })` optionally sets a per-instrument linear output multiplier from 0 to 1.
+It applies to both WAV and VST instruments, defaults to 1, and rejects non-finite or out-of-range values.
+
 A chord duration's ratio controls its gate length as a multiple of its rhythmic length. Ratios may exceed 1, so a note
 can ring past the next chord, which still starts on its normal schedule.
 

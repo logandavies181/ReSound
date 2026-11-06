@@ -41,14 +41,20 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
         {
             plugin.set_parameter_by_name(&value.parameter_name, value.value)?;
         }
-        rendered_plugins.push(render_score(
+        let mut rendered = render_score(
             &mut plugin,
             vst_index,
             &vst.name,
             &parameter_values,
             &input,
             &samples,
-        )?);
+        )?;
+        for channel in &mut rendered {
+            for value in channel {
+                *value *= vst.volume as f32;
+            }
+        }
+        rendered_plugins.push(rendered);
     }
 
     let output_channels = rendered_plugins
@@ -65,7 +71,9 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     for plugin_channels in rendered_plugins {
         mix_channels(&mut channels, &plugin_channels);
     }
-    for (sample_index, (sample, sample_rate)) in samples.iter().enumerate() {
+    for (sample_index, ((sample, sample_rate), instrument)) in
+        samples.iter().zip(&input.samples).enumerate()
+    {
         mix_samples(
             &mut channels,
             sample,
@@ -73,6 +81,7 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
             SAMPLE_RATE,
             &input.score,
             sample_index,
+            instrument.volume,
         )?;
     }
     write_wav(&input.output_path, &channels, SAMPLE_RATE as u32)?;
@@ -331,6 +340,7 @@ fn mix_samples(
     output_sample_rate: f64,
     score: &[ScoreEvent],
     sample_index: usize,
+    volume: f64,
 ) -> Result<(), Box<dyn Error>> {
     if sample_rate == 0 || !output_sample_rate.is_finite() || output_sample_rate <= 0.0 {
         return Err("sample rates must be greater than zero".into());
@@ -373,8 +383,9 @@ fn mix_samples(
 
                 let next_frame = (source_frame + 1).min(sample_frames - 1);
                 let fraction = (source_position - source_frame as f64) as f32;
-                *output_sample += sample_samples[source_frame] * (1.0 - fraction)
-                    + sample_samples[next_frame] * fraction;
+                *output_sample += (sample_samples[source_frame] * (1.0 - fraction)
+                    + sample_samples[next_frame] * fraction)
+                    * volume as f32;
             }
         }
     }
@@ -467,7 +478,16 @@ mod tests {
         let samples = [(vec![vec![0.25, 0.25]], 1), (vec![vec![0.5, 0.5]], 1)];
 
         for (sample_index, (sample, sample_rate)) in samples.into_iter().enumerate() {
-            mix_samples(&mut output, &sample, sample_rate, 1.0, &score, sample_index).unwrap();
+            mix_samples(
+                &mut output,
+                &sample,
+                sample_rate,
+                1.0,
+                &score,
+                sample_index,
+                1.0,
+            )
+            .unwrap();
         }
 
         assert_eq!(output, vec![vec![0.75, 0.75]]);
@@ -481,8 +501,21 @@ mod tests {
         }];
         let mut output = vec![vec![0.0; 1]];
 
-        mix_samples(&mut output, &[vec![0.25]], 1, 1.0, &score, 1).unwrap();
+        mix_samples(&mut output, &[vec![0.25]], 1, 1.0, &score, 1, 1.0).unwrap();
 
         assert_eq!(output, vec![vec![0.0]]);
+    }
+
+    #[test]
+    fn scales_sample_output_by_instrument_volume() {
+        let score = [ScoreEvent::PlaySample {
+            at_seconds: 0.0,
+            sample_index: 0,
+        }];
+        let mut output = vec![vec![0.0; 1]];
+
+        mix_samples(&mut output, &[vec![0.8]], 1, 1.0, &score, 0, 0.25).unwrap();
+
+        assert_eq!(output, vec![vec![0.2]]);
     }
 }

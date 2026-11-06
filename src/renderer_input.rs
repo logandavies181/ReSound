@@ -35,11 +35,13 @@ pub struct VstInstrument {
     pub name: String,
     pub plugin_path: PathBuf,
     pub preset_path: PathBuf,
+    pub volume: f64,
 }
 
 #[derive(Debug)]
 pub struct SampleInstrument {
     pub path: PathBuf,
+    pub volume: f64,
 }
 
 #[derive(Clone, Copy, Debug)]

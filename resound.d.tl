@@ -1,9 +1,9 @@
 global record ReSound
   -- All the methods chain
 
-  --- Parses the path into a name and type, based on file extension.
+  --- Parses the path into a name and type, based on file extension. Optional volume is a linear 0..1 multiplier, default 1.
   --- Instrument names must be unique.
-  addInstrument: function(path: string): ReSound
+  addInstrument: function(path: string, ? InstrumentConfigInput): ReSound
   setDefaultBpm: function(bpm: number): ReSound
   --- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
   setDefaultMeter: function(barLength: number): ReSound
@@ -35,6 +35,12 @@ local _: ReSoundConfig = {}
 global record InstrumentConfig
   name: string
   type: InstrumentType
+  volume: number
+end
+
+global record InstrumentConfigInput
+  --- Linear output multiplier in the inclusive 0..1 range; defaults to 1.
+  volume: number|nil
 end
 
 global enum InstrumentType

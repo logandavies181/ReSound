@@ -55,6 +55,7 @@ fn collect_samples(
         .filter(|instrument| instrument.r#type == InstrumentType::Wav)
         .map(|instrument| SampleInstrument {
             path: project_dir.join(&instrument.path),
+            volume: instrument.volume,
         })
         .collect()
 }
@@ -301,16 +302,19 @@ mod tests {
                 name: "kick".into(),
                 path: "samples/kick.wav".into(),
                 r#type: InstrumentType::Wav,
+                volume: 1.0,
             },
             InstrumentConfig {
                 name: "synth".into(),
                 path: "plugins/synth.vst3".into(),
                 r#type: InstrumentType::Vst,
+                volume: 1.0,
             },
             InstrumentConfig {
                 name: "snare".into(),
                 path: "drums/snare.wav".into(),
                 r#type: InstrumentType::Wav,
+                volume: 1.0,
             },
         ];
 
@@ -347,6 +351,7 @@ mod tests {
                 name: "synth".into(),
                 path: "synth.vst3".into(),
                 r#type: InstrumentType::Vst,
+                volume: 1.0,
             }],
             ..LuaState::default()
         };
@@ -426,6 +431,7 @@ mod tests {
                 name: "synth".into(),
                 path: "synth.vital".into(),
                 r#type: InstrumentType::Vst,
+                volume: 1.0,
             }],
             chord_sets: vec![
                 ChordSet {
@@ -500,6 +506,7 @@ mod tests {
                 name: "synth".into(),
                 path: "synth.vital".into(),
                 r#type: InstrumentType::Vst,
+                volume: 1.0,
             }],
             chord_sets: vec![ChordSet {
                 instrument_name: "synth".into(),
@@ -561,6 +568,7 @@ mod tests {
                 name: "synth".into(),
                 path: "synth.vital".into(),
                 r#type: InstrumentType::Vst,
+                volume: 1.0,
             }],
             chord_sets: vec![ChordSet {
                 instrument_name: "synth".into(),
@@ -593,16 +601,19 @@ mod tests {
                     name: "vital".into(),
                     path: "vital.vital".into(),
                     r#type: InstrumentType::Vst,
+                    volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "kick".into(),
                     path: "kick.wav".into(),
                     r#type: InstrumentType::Wav,
+                    volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "dexed".into(),
                     path: "dexed.dexed".into(),
                     r#type: InstrumentType::Vst,
+                    volume: 1.0,
                 },
             ],
             chord_sets: vec![
@@ -664,6 +675,7 @@ mod tests {
             name: "synth".into(),
             path: "synth.vst3".into(),
             r#type: InstrumentType::Vst,
+            volume: 1.0,
         });
         state.chord_sets.push(ChordSet {
             instrument_name: "synth".into(),
@@ -689,11 +701,13 @@ mod tests {
                     name: "kick".into(),
                     path: "kick.wav".into(),
                     r#type: InstrumentType::Wav,
+                    volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "snare".into(),
                     path: "snare.wav".into(),
                     r#type: InstrumentType::Wav,
+                    volume: 1.0,
                 },
             ],
             chord_sets: vec![ChordSet {
@@ -748,6 +762,7 @@ mod tests {
                 name: "synth".into(),
                 path: "synth.vst3".into(),
                 r#type: InstrumentType::Vst,
+                volume: 1.0,
             }],
             chord_sets: vec![ChordSet {
                 instrument_name: "synth".into(),

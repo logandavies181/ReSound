@@ -83,11 +83,12 @@ pub struct Duration {
     pub ratio: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InstrumentConfig {
     pub name: String,
     pub path: PathBuf,
     pub r#type: InstrumentType,
+    pub volume: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,7 +142,7 @@ fn install_module(
     let instrument_state = Rc::clone(&state);
     module.set(
         "addInstrument",
-        lua.create_function(move |lua, path: String| {
+        lua.create_function(move |lua, (path, options): (String, Option<Table>)| {
             let instrument_path = Path::new(&path);
             let name = instrument_path
                 .file_stem()
@@ -167,6 +168,16 @@ fn install_module(
                     instrument_path.display()
                 ))
             })?;
+            let volume = options
+                .map(|options| options.raw_get::<Option<f64>>("volume"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(1.0);
+            if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "instrument volume must be finite and between 0 and 1, got {volume}"
+                )));
+            }
 
             let mut instrument_state = instrument_state.borrow_mut();
             if instrument_state
@@ -182,6 +193,7 @@ fn install_module(
                 name: name.to_owned(),
                 path: PathBuf::from(path),
                 r#type: instrument_type,
+                volume,
             });
             loaded_module(lua)
         })?,
@@ -417,8 +429,8 @@ mod tests {
         let state = execute_source(
             r#"
                 local resound = require("resound")
-                resound.addInstrument("samples/drums.wav")
-                    .addInstrument("plugins/synth.vst3")
+                resound.addInstrument("samples/drums.wav", { volume = 0 })
+                    .addInstrument("plugins/synth.vst3", { volume = 0.6 })
                     .setDefaultBpm(132)
             "#,
             "test.lua".into(),
@@ -433,11 +445,13 @@ mod tests {
                         name: "drums".into(),
                         path: "samples/drums.wav".into(),
                         r#type: InstrumentType::Wav,
+                        volume: 0.0,
                     },
                     super::InstrumentConfig {
                         name: "synth".into(),
                         path: "plugins/synth.vst3".into(),
                         r#type: InstrumentType::Vst,
+                        volume: 0.6,
                     },
                 ],
                 default_bpm: 132.0,
@@ -445,6 +459,19 @@ mod tests {
                 chord_sets: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn rejects_invalid_instrument_volume() {
+        for volume in ["-0.1", "1.1", "math.huge"] {
+            let source = format!(
+                r#"
+                    local resound = require("resound")
+                    resound.addInstrument("synth.vital", {{ volume = {volume} }})
+                "#
+            );
+            assert!(execute_source(&source, "test.lua".into()).is_err());
+        }
     }
 
     #[test]
