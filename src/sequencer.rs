@@ -145,6 +145,9 @@ fn sequence_score(state: &LuaState) -> Result<SequencedScore, Box<dyn std::error
                 let at_seconds = start_seconds + beat_offset * seconds_per_quarter;
                 let note_off_seconds =
                     at_seconds + chord.duration.length * chord.duration.ratio * seconds_per_quarter;
+                if !note_off_seconds.is_finite() {
+                    return Err("chord gate extends beyond the supported timeline".into());
+                }
                 if let Some(effect_fn) = &chord.effect_fn {
                     effects.push(EffectSpan {
                         start_seconds: at_seconds,
@@ -218,9 +221,9 @@ fn validate_chord(chord: &Chord) -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    if !duration.ratio.is_finite() || !(0.0..=1.0).contains(&duration.ratio) {
+    if !duration.ratio.is_finite() || duration.ratio < 0.0 {
         return Err(format!(
-            "chord duration ratio must be between zero and one, got {}",
+            "chord duration ratio must be finite and non-negative, got {}",
             duration.ratio
         )
         .into());
@@ -395,6 +398,65 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn gate_ratio_can_exceed_one_without_delaying_the_next_chord() {
+        let state = LuaState {
+            default_bpm: 120.0,
+            default_meter: 4.0,
+            instruments: vec![InstrumentConfig {
+                name: "synth".into(),
+                path: "synth.vital".into(),
+                r#type: InstrumentType::Vst,
+            }],
+            chord_sets: vec![ChordSet {
+                instrument_name: "synth".into(),
+                at: 1.0,
+                times: None,
+                chords: vec![
+                    Chord {
+                        pitches: vec!["c4".into()],
+                        duration: Duration {
+                            length: 0.5,
+                            ratio: 3.0,
+                        },
+                        effect_fn: None,
+                    },
+                    Chord {
+                        pitches: vec!["d4".into()],
+                        duration: Duration {
+                            length: 0.5,
+                            ratio: 1.0,
+                        },
+                        effect_fn: None,
+                    },
+                ],
+            }],
+        };
+
+        let (score, _, _) = sequence_score(&state).unwrap();
+        let note_ons = score
+            .iter()
+            .filter_map(|event| match event {
+                ScoreEvent::NoteOn {
+                    at_seconds, note, ..
+                } => Some((*at_seconds, *note)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let note_offs = score
+            .iter()
+            .filter_map(|event| match event {
+                ScoreEvent::NoteOff {
+                    at_seconds, note, ..
+                } => Some((*at_seconds, *note)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(note_ons, vec![(0.0, 60), (0.25, 62)]);
+        assert_eq!(note_offs, vec![(0.5, 62), (0.75, 60)]);
     }
 
     #[test]

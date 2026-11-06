@@ -62,6 +62,9 @@ Each `pushChords()` call names its target instrument. Pitches sent to a VST inst
 instruments are triggered with the special `x` pitch. Sample events play only the named WAV instrument, and instrument
 names must be unique.
 
+A chord duration's ratio controls its gate length as a multiple of its rhythmic length. Ratios may exceed 1, so a note
+can ring past the next chord, which still starts on its normal schedule.
+
 Bars are automatically added as needed based on the output of the Lua State. Bars may be modified in terms of BPM and
 length in the future. For now they take on the default values as set in the user's Lua.
 

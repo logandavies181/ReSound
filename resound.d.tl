@@ -56,7 +56,7 @@ global type EffectFn = function(t: number, playing: boolean)
 global record Duration
   --- How long the note lasts, in terms of quarter notes.
   length: number
-  --- Fraction of how long to actually play the note for
+  --- Gate duration as a multiple of length; values above 1 let notes ring over later notes.
   ratio: number
 end
 
