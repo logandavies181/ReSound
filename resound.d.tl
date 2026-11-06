@@ -66,6 +66,9 @@ global o: function(Pitch, DurationTuple): Chord -- The note and the same note on
 --- Chord
 global c: function({Pitch}, DurationTuple): Chord -- Just the notes.
 
+--- Percussion (sample)
+global p: function(DurationTuple): Chord -- No pitch, just the "x".
+
 --- Rest
 global r: function(DurationTuple): Chord -- No sounds, just used for adjusting timing.
 

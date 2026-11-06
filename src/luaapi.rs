@@ -221,6 +221,12 @@ fn install_score_functions(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     globals.set(
+        "p",
+        lua.create_function(|lua, duration: Table| {
+            create_chord(lua, vec!["x".to_owned()], &duration)
+        })?,
+    )?;
+    globals.set(
         "r",
         lua.create_function(|lua, duration: Table| create_chord(lua, Vec::new(), &duration))?,
     )?;
@@ -410,6 +416,11 @@ mod tests {
                 assert(chord.pitches[2] == "e4")
                 assert(chord.duration.length == 4)
                 assert(chord.duration.ratio == 0.75)
+
+                local percussion = p({0.5})
+                assert(#percussion.pitches == 1)
+                assert(percussion.pitches[1] == "x")
+                assert(percussion.duration.length == 0.5)
 
                 local rest = r({1})
                 assert(#rest.pitches == 0)

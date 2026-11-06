@@ -17,6 +17,6 @@ resound.addInstrument("test/fixtures/snare.wav")
         r({1}),
     }, {at = 2})
     .pushChords("snare", {
-        n(x, {1}),
-        n(x, {1}),
+        p({1}),
+        p({1}),
     }, {at = 1})
