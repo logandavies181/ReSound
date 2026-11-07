@@ -30,7 +30,7 @@ pub fn sequence_from_bar(
     if vst.is_empty() {
         return Err("no VST instrument configured".into());
     }
-    let samples = collect_samples(&state.instruments, project_dir);
+    let samples = collect_samples(&state.instruments, project_dir)?;
 
     Ok(RendererInput {
         output_path: output_path.into(),
@@ -49,13 +49,19 @@ pub fn sequence_from_bar(
 fn collect_samples(
     instruments: &[crate::luaapi::InstrumentConfig],
     project_dir: &Path,
-) -> Vec<SampleInstrument> {
+) -> Result<Vec<SampleInstrument>, Box<dyn std::error::Error>> {
     instruments
         .iter()
         .filter(|instrument| instrument.r#type == InstrumentType::Wav)
-        .map(|instrument| SampleInstrument {
-            path: project_dir.join(&instrument.path),
-            volume: instrument.volume,
+        .map(|instrument| {
+            let path = instrument
+                .path
+                .as_ref()
+                .ok_or_else(|| format!("sample instrument '{}' has no path", instrument.name))?;
+            Ok(SampleInstrument {
+                path: project_dir.join(path),
+                volume: instrument.volume,
+            })
         })
         .collect()
 }
@@ -301,21 +307,21 @@ mod tests {
             InstrumentConfig {
                 name: "kick".into(),
                 plugin: String::new(),
-                path: "samples/kick.wav".into(),
+                path: Some("samples/kick.wav".into()),
                 r#type: InstrumentType::Wav,
                 volume: 1.0,
             },
             InstrumentConfig {
                 name: "synth".into(),
                 plugin: "Vital".into(),
-                path: "plugins/synth.vst3".into(),
+                path: Some("plugins/synth.vst3".into()),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
             },
             InstrumentConfig {
                 name: "snare".into(),
                 plugin: String::new(),
-                path: "drums/snare.wav".into(),
+                path: Some("drums/snare.wav".into()),
                 r#type: InstrumentType::Wav,
                 volume: 1.0,
             },
@@ -323,6 +329,7 @@ mod tests {
 
         assert_eq!(
             collect_samples(&instruments, std::path::Path::new("/project"))
+                .unwrap()
                 .into_iter()
                 .map(|sample| sample.path)
                 .collect::<Vec<_>>(),
@@ -353,7 +360,7 @@ mod tests {
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
                 plugin: "Vital".into(),
-                path: "synth.vst3".into(),
+                path: Some("synth.vst3".into()),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
             }],
@@ -434,7 +441,7 @@ mod tests {
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
                 plugin: "Vital".into(),
-                path: "synth.vital".into(),
+                path: Some("synth.vital".into()),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
             }],
@@ -510,7 +517,7 @@ mod tests {
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
                 plugin: "Vital".into(),
-                path: "synth.vital".into(),
+                path: Some("synth.vital".into()),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
             }],
@@ -573,7 +580,7 @@ mod tests {
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
                 plugin: "Vital".into(),
-                path: "synth.vital".into(),
+                path: Some("synth.vital".into()),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
             }],
@@ -607,21 +614,21 @@ mod tests {
                 InstrumentConfig {
                     name: "vital".into(),
                     plugin: "Vital".into(),
-                    path: "vital.vital".into(),
+                    path: Some("vital.vital".into()),
                     r#type: InstrumentType::Vst,
                     volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "kick".into(),
                     plugin: String::new(),
-                    path: "kick.wav".into(),
+                    path: Some("kick.wav".into()),
                     r#type: InstrumentType::Wav,
                     volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "dexed".into(),
                     plugin: "Dexed".into(),
-                    path: "dexed.dexed".into(),
+                    path: Some("dexed.dexed".into()),
                     r#type: InstrumentType::Vst,
                     volume: 1.0,
                 },
@@ -684,7 +691,7 @@ mod tests {
         state.instruments.push(InstrumentConfig {
             name: "synth".into(),
             plugin: "Vital".into(),
-            path: "synth.vst3".into(),
+            path: Some("synth.vst3".into()),
             r#type: InstrumentType::Vst,
             volume: 1.0,
         });
@@ -711,14 +718,14 @@ mod tests {
                 InstrumentConfig {
                     name: "kick".into(),
                     plugin: String::new(),
-                    path: "kick.wav".into(),
+                    path: Some("kick.wav".into()),
                     r#type: InstrumentType::Wav,
                     volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "snare".into(),
                     plugin: String::new(),
-                    path: "snare.wav".into(),
+                    path: Some("snare.wav".into()),
                     r#type: InstrumentType::Wav,
                     volume: 1.0,
                 },
@@ -774,7 +781,7 @@ mod tests {
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
                 plugin: "Vital".into(),
-                path: "synth.vst3".into(),
+                path: Some("synth.vst3".into()),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
             }],

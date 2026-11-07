@@ -21,7 +21,7 @@ pub fn resolve(
     Ok(VstInstrument {
         name: instrument.name.clone(),
         plugin_path,
-        preset_path: project_dir.join(&instrument.path),
+        preset_path: instrument.path.as_ref().map(|path| project_dir.join(path)),
         volume: instrument.volume,
     })
 }

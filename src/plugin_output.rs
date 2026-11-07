@@ -31,12 +31,41 @@ pub fn capture<T>(
     drop(stderr);
     drop(stdout);
 
-    Ok((result?, captured_stdout, captured_stderr))
+    match result {
+        Ok(value) => Ok((value, captured_stdout, captured_stderr)),
+        Err(error) => {
+            if let Err(output_error) = replay_output(&captured_stdout, &captured_stderr) {
+                return Err(io::Error::other(format!(
+                    "{error}; failed to replay plugin output: {output_error}"
+                ))
+                .into());
+            }
+            Err(error)
+        }
+    }
+}
+
+fn replay_output(stdout: &[u8], stderr: &[u8]) -> io::Result<()> {
+    let mut output = io::stdout().lock();
+    let mut error = io::stderr().lock();
+    replay_to(&mut output, &mut error, stdout, stderr)
+}
+
+fn replay_to(
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+    captured_stdout: &[u8],
+    captured_stderr: &[u8],
+) -> io::Result<()> {
+    stdout.write_all(captured_stdout)?;
+    stdout.flush()?;
+    stderr.write_all(captured_stderr)?;
+    stderr.flush()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::capture;
+    use super::{capture, replay_to};
 
     #[test]
     fn captures_stdout_and_stderr() {
@@ -60,6 +89,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, 42);
+        assert_eq!(stdout, b"plugin stdout\n");
+        assert_eq!(stderr, b"plugin stderr\n");
+    }
+
+    #[test]
+    fn replays_captured_output_to_matching_streams() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        replay_to(
+            &mut stdout,
+            &mut stderr,
+            b"plugin stdout\n",
+            b"plugin stderr\n",
+        )
+        .unwrap();
+
         assert_eq!(stdout, b"plugin stdout\n");
         assert_eq!(stderr, b"plugin stderr\n");
     }

@@ -34,7 +34,7 @@ pub struct TimedParameterValue {
 pub struct VstInstrument {
     pub name: String,
     pub plugin_path: PathBuf,
-    pub preset_path: PathBuf,
+    pub preset_path: Option<PathBuf>,
     pub volume: f64,
 }
 

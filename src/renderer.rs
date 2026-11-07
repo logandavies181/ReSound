@@ -30,14 +30,16 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     )?;
     let mut rendered_plugins = Vec::with_capacity(input.vst.len());
     for (vst_index, vst) in input.vst.iter().enumerate() {
-        let (mut plugin, _, _) = plugin_output::capture(|| {
+        let (mut rendered, _, _) = plugin_output::capture(|| {
             let mut plugin =
                 simple::load_plugin_with_settings(&vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
-            let preset = fs::read(&vst.preset_path)?;
-            plugin.load_state_with_context(
-                &preset,
-                &StateContext::preset_from_path(&vst.preset_path),
-            )?;
+            if let Some(preset_path) = &vst.preset_path {
+                let preset = fs::read(preset_path)?;
+                plugin.load_state_with_context(
+                    &preset,
+                    &StateContext::preset_from_path(preset_path),
+                )?;
+            }
             for value in input
                 .initial_parameter_values
                 .iter()
@@ -45,16 +47,15 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
             {
                 plugin.set_parameter_by_name(&value.parameter_name, value.value)?;
             }
-            Ok(plugin)
+            render_score(
+                &mut plugin,
+                vst_index,
+                &vst.name,
+                &parameter_values,
+                &input,
+                &samples,
+            )
         })?;
-        let mut rendered = render_score(
-            &mut plugin,
-            vst_index,
-            &vst.name,
-            &parameter_values,
-            &input,
-            &samples,
-        )?;
         for channel in &mut rendered {
             for value in channel {
                 *value *= vst.volume as f32;

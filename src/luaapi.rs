@@ -87,7 +87,7 @@ pub struct Duration {
 pub struct InstrumentConfig {
     pub name: String,
     pub plugin: String,
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
     pub r#type: InstrumentType,
     pub volume: f64,
 }
@@ -136,14 +136,16 @@ fn install_module(
         lua.create_function(move |lua, config: Table| {
             let name: String = config.raw_get("name")?;
             let plugin: String = config.raw_get("plugin")?;
-            let preset: String = config.raw_get("preset")?;
-            let volume: f64 = config.raw_get("volume")?;
+            let preset = config
+                .raw_get::<Option<String>>("preset")?
+                .map(PathBuf::from);
+            let volume = config.raw_get::<Option<f64>>("volume")?.unwrap_or(1.0);
             let mut instrument_state = instrument_state.borrow_mut();
             ensure_unique_name(&instrument_state.instruments, &name)?;
             instrument_state.instruments.push(InstrumentConfig {
                 name,
                 plugin,
-                path: PathBuf::from(preset),
+                path: preset,
                 r#type: InstrumentType::Vst,
                 volume: validate_volume(volume, "instrument")?,
             });
@@ -157,13 +159,13 @@ fn install_module(
         lua.create_function(move |lua, config: Table| {
             let name: String = config.raw_get("name")?;
             let path: String = config.raw_get("path")?;
-            let volume: f64 = config.raw_get("volume")?;
+            let volume = config.raw_get::<Option<f64>>("volume")?.unwrap_or(1.0);
             let mut instrument_state = sample_state.borrow_mut();
             ensure_unique_name(&instrument_state.instruments, &name)?;
             instrument_state.instruments.push(InstrumentConfig {
                 name,
                 plugin: String::new(),
-                path: PathBuf::from(path),
+                path: Some(PathBuf::from(path)),
                 r#type: InstrumentType::Wav,
                 volume: validate_volume(volume, "sample")?,
             });
@@ -459,14 +461,14 @@ mod tests {
                     super::InstrumentConfig {
                         name: "drums".into(),
                         plugin: String::new(),
-                        path: "samples/drums.wav".into(),
+                        path: Some("samples/drums.wav".into()),
                         r#type: InstrumentType::Wav,
                         volume: 0.0,
                     },
                     super::InstrumentConfig {
                         name: "synth".into(),
                         plugin: "Vital".into(),
-                        path: "presets/lead.vital".into(),
+                        path: Some("presets/lead.vital".into()),
                         r#type: InstrumentType::Vst,
                         volume: 0.6,
                     },
@@ -476,6 +478,41 @@ mod tests {
                 chord_sets: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn defaults_missing_instrument_and_sample_volumes_to_one() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument({
+                    name = "lead",
+                    plugin = "Vital",
+                    preset = "lead.vital",
+                }).addSample({name = "kick", path = "kick.wav"})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.instruments[0].volume, 1.0);
+        assert_eq!(state.instruments[1].volume, 1.0);
+    }
+
+    #[test]
+    fn allows_vst_instrument_without_a_preset() {
+        let state = execute_source(
+            r#"
+                require("resound").addInstrument({
+                    name = "default_synth",
+                    plugin = "Vital",
+                })
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.instruments[0].path, None);
     }
 
     #[test]
@@ -515,7 +552,7 @@ mod tests {
         assert_eq!(error.instruments[0].plugin, "Configured Synth");
         assert_eq!(
             error.instruments[0].path,
-            std::path::PathBuf::from("presets/patch.custom")
+            Some(std::path::PathBuf::from("presets/patch.custom"))
         );
     }
 
@@ -538,7 +575,7 @@ mod tests {
         assert_eq!(state.instruments[0].plugin, "Dexed");
         assert_eq!(
             state.instruments[0].path,
-            std::path::PathBuf::from("presets/synth.dexed")
+            Some(std::path::PathBuf::from("presets/synth.dexed"))
         );
     }
 
@@ -563,7 +600,7 @@ mod tests {
         assert_eq!(state.instruments[1].plugin, "Vital");
         assert_eq!(
             state.instruments[1].path,
-            std::path::PathBuf::from("presets/lead.vital")
+            Some(std::path::PathBuf::from("presets/lead.vital"))
         );
         assert_eq!(state.instruments[1].volume, 0.6);
     }

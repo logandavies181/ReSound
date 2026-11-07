@@ -39,14 +39,14 @@ local _: ReSoundConfig = {}
 global record InstrumentConfig
   name: string
   plugin: string
-  preset: string -- Path to preset file.
-  volume: number
+  preset: string|nil -- Path to preset file. Only pass to plugin if present.
+  volume: number|nil -- Defaults to 1
 end
 
 global record SampleConfig
   name: string
   path: string
-  volume: number
+  volume: number|nil -- Defaults to 1
 end
 
 global record Chord
