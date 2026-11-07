@@ -83,14 +83,17 @@ Orchestrate a subcommand hierarchy, defaulting to `perform` if the first arg end
 
 Creates `tlconfig.lua` and a complete `resound.d.tl` pitch declaration in the current directory. Existing files are not overwritten.
 
+### list-plugins
+
+Lists the names of all discovered plugins.
+
 ### show-parameters
 
-Loads the given Vital `.vital` or Dexed `.dexed` preset file and displays its supported parameters with their current
-values. The corresponding VST3 plugin must be installed and discoverable.
+Displays all of the parameters of the named plugin.
 
 #### Args
 
-File name - required. Path to a `.vital` or `.dexed` preset; relative paths are resolved from the current directory.
+Plugin name - required. Name of the plugin as displayed in list-plugins
 
 ### perform
 

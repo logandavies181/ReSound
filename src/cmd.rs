@@ -19,6 +19,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Some(first) if first.to_string_lossy().ends_with(".lua") => ("perform", &args[..]),
         Some(first) if first == "perform" => ("perform", &args[1..]),
         Some(first) if first == "init" => ("init", &args[1..]),
+        Some(first) if first == "list-plugins" => ("list-plugins", &args[1..]),
         Some(first) if first == "show-parameters" => ("show-parameters", &args[1..]),
         Some(first) if first == "--help" || first == "-h" => {
             print_usage();
@@ -32,6 +33,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     match command {
         "perform" => perform(command_args),
         "init" => init(command_args),
+        "list-plugins" => list_plugins(command_args),
         "show-parameters" => show_parameters(command_args),
         _ => unreachable!(),
     }
@@ -164,17 +166,34 @@ fn parse_from_bar(value: &OsString) -> Result<u64, Box<dyn Error>> {
     Ok(bar)
 }
 
-fn show_parameters(args: &[OsString]) -> Result<(), Box<dyn Error>> {
+fn list_plugins(args: &[OsString]) -> Result<(), Box<dyn Error>> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("Usage: resound show-parameters FILE");
+        println!("Usage: resound list-plugins");
         return Ok(());
     }
-    let [preset_path] = args else {
-        return Err("show-parameters requires one .vital or .dexed preset file".into());
-    };
+    if !args.is_empty() {
+        return Err("list-plugins accepts no arguments".into());
+    }
 
-    let preset_path = resolve_from(&env::current_dir()?, Path::new(preset_path));
-    for (name, value) in vst_loader::show_parameters(&preset_path)? {
+    for name in vst_loader::list_plugins()? {
+        println!("{name}");
+    }
+    Ok(())
+}
+
+fn show_parameters(args: &[OsString]) -> Result<(), Box<dyn Error>> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("Usage: resound show-parameters PLUGIN_NAME");
+        return Ok(());
+    }
+    let [plugin_name] = args else {
+        return Err("show-parameters requires one plugin name".into());
+    };
+    let plugin_name = plugin_name
+        .to_str()
+        .ok_or("plugin name must be valid UTF-8")?;
+
+    for (name, value) in vst_loader::show_plugin_parameters(plugin_name)? {
         println!("{name}: {value}");
     }
     Ok(())
@@ -191,7 +210,8 @@ fn resolve_from(base: &Path, path: &Path) -> PathBuf {
 fn print_usage() {
     println!("Usage: resound [perform] [FILE.lua] [-o|--output FILE.wav] [-f|--from-bar BAR]");
     println!("       resound init");
-    println!("       resound show-parameters FILE");
+    println!("       resound list-plugins");
+    println!("       resound show-parameters PLUGIN_NAME");
     println!("       resound -h|--help");
 }
 

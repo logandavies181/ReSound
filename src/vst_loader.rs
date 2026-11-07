@@ -1,9 +1,10 @@
-use std::{error::Error, fs, path::Path};
+use std::{error::Error, path::Path};
 
-use vst3_host::{PluginInfo, StateContext, simple};
+use vst3_host::{PluginInfo, simple};
 
 use crate::{
     luaapi::{InstrumentConfig, InstrumentType},
+    plugin_output,
     renderer_input::VstInstrument,
 };
 
@@ -15,7 +16,8 @@ pub fn resolve(
         return Err(format!("instrument '{}' is not a VST instrument", instrument.name).into());
     }
     let plugin_name = plugin_name(instrument);
-    let plugin_path = select_plugin(simple::discover_plugins()?, plugin_name)?;
+    let (plugin_path, _, _) =
+        plugin_output::capture(|| select_plugin(simple::discover_plugins()?, plugin_name))?;
     let preset_path = preset_path(instrument, project_dir)?;
 
     Ok(VstInstrument {
@@ -26,24 +28,28 @@ pub fn resolve(
     })
 }
 
-pub fn show_parameters(preset_path: &Path) -> Result<Vec<(String, String)>, Box<dyn Error>> {
-    let plugin_name = preset_plugin_name(preset_path)
-        .ok_or("show-parameters expects a .vital or .dexed preset file")?;
-    let plugin_path = select_plugin(simple::discover_plugins()?, plugin_name)?;
-    let mut plugin = simple::load_plugin_with_settings(plugin_path, 44_100.0, 512)?;
-    let preset = fs::read(preset_path)?;
-    plugin.load_state_with_context(&preset, &StateContext::preset_from_path(preset_path))?;
+pub fn list_plugins() -> Result<Vec<String>, Box<dyn Error>> {
+    let (plugins, _, _) = plugin_output::capture(|| Ok(simple::discover_plugins()?))?;
+    Ok(plugins.into_iter().map(|plugin| plugin.name).collect())
+}
 
-    plugin
-        .get_parameters()?
-        .into_iter()
-        .map(|parameter| {
-            Ok((
-                parameter.name,
-                plugin.format_parameter(parameter.id, parameter.value)?,
-            ))
-        })
-        .collect()
+pub fn show_plugin_parameters(plugin_name: &str) -> Result<Vec<(String, String)>, Box<dyn Error>> {
+    let (parameters, _, _) = plugin_output::capture(|| {
+        let plugin_path = select_plugin(simple::discover_plugins()?, plugin_name)?;
+        let plugin = simple::load_plugin_with_settings(plugin_path, 44_100.0, 512)?;
+
+        plugin
+            .get_parameters()?
+            .into_iter()
+            .map(|parameter| {
+                Ok((
+                    parameter.name,
+                    plugin.format_parameter(parameter.id, parameter.value)?,
+                ))
+            })
+            .collect()
+    })?;
+    Ok(parameters)
 }
 
 fn plugin_name(instrument: &InstrumentConfig) -> &str {
@@ -95,17 +101,7 @@ mod tests {
     use crate::luaapi::{InstrumentConfig, InstrumentType};
     use vst3_host::PluginInfo;
 
-    use super::{plugin_name, preset_path, select_plugin, show_parameters};
-
-    #[test]
-    fn show_parameters_rejects_unsupported_preset_files() {
-        assert_eq!(
-            show_parameters(std::path::Path::new("synth.vstpreset"))
-                .unwrap_err()
-                .to_string(),
-            "show-parameters expects a .vital or .dexed preset file"
-        );
-    }
+    use super::{plugin_name, preset_path, select_plugin};
 
     #[test]
     fn selects_plugin_by_configured_file_name() {

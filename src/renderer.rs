@@ -8,6 +8,7 @@ use vst3_host::{
     simple,
 };
 
+use crate::plugin_output;
 use crate::renderer_input::{EffectSpan, RendererInput, ScoreEvent, TimedParameterValue};
 
 const SAMPLE_RATE: f64 = 44_100.0;
@@ -29,18 +30,23 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     )?;
     let mut rendered_plugins = Vec::with_capacity(input.vst.len());
     for (vst_index, vst) in input.vst.iter().enumerate() {
-        let mut plugin =
-            simple::load_plugin_with_settings(&vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
-        let preset = fs::read(&vst.preset_path)?;
-        plugin
-            .load_state_with_context(&preset, &StateContext::preset_from_path(&vst.preset_path))?;
-        for value in input
-            .initial_parameter_values
-            .iter()
-            .filter(|value| value.instrument_name == vst.name)
-        {
-            plugin.set_parameter_by_name(&value.parameter_name, value.value)?;
-        }
+        let (mut plugin, _, _) = plugin_output::capture(|| {
+            let mut plugin =
+                simple::load_plugin_with_settings(&vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
+            let preset = fs::read(&vst.preset_path)?;
+            plugin.load_state_with_context(
+                &preset,
+                &StateContext::preset_from_path(&vst.preset_path),
+            )?;
+            for value in input
+                .initial_parameter_values
+                .iter()
+                .filter(|value| value.instrument_name == vst.name)
+            {
+                plugin.set_parameter_by_name(&value.parameter_name, value.value)?;
+            }
+            Ok(plugin)
+        })?;
         let mut rendered = render_score(
             &mut plugin,
             vst_index,

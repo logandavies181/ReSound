@@ -1,5 +1,6 @@
 mod cmd;
 mod luaapi;
+mod plugin_output;
 mod renderer;
 mod renderer_input;
 mod sequencer;
