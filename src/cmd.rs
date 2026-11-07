@@ -53,41 +53,40 @@ fn init(args: &[OsString]) -> Result<(), Box<dyn Error>> {
 }
 
 fn init_project(project_dir: &Path) -> Result<(), Box<dyn Error>> {
-    let outputs = [
-        (
-            project_dir.join("tlconfig.lua"),
-            include_str!("../tlconfig.lua"),
-        ),
-        (
-            project_dir.join("resound.d.tl"),
-            include_str!("../resound.d.tl"),
-        ),
-    ];
-
-    for (path, _) in &outputs {
-        if path.try_exists()? {
-            return Err(format!("refusing to overwrite {}", path.display()).into());
-        }
-    }
-
-    let mut created = Vec::new();
-    for (path, contents) in outputs {
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => file,
-            Err(error) => {
-                cleanup_created(&created, &error)?;
+    let tlconfig_path = project_dir.join("tlconfig.lua");
+    let mut created_tlconfig = false;
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tlconfig_path)
+    {
+        Ok(mut file) => {
+            created_tlconfig = true;
+            if let Err(error) = file.write_all(include_str!("../tlconfig.lua").as_bytes()) {
+                drop(file);
+                cleanup_created(std::slice::from_ref(&tlconfig_path), &error)?;
                 return Err(error.into());
             }
-        };
-        created.push(path);
-        if let Err(error) = file.write_all(contents.as_bytes()) {
-            drop(file);
-            cleanup_created(&created, &error)?;
-            return Err(error.into());
         }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            if !tlconfig_path.is_file() {
+                return Err(format!("{} is not a file", tlconfig_path.display()).into());
+            }
+        }
+        Err(error) => return Err(error.into()),
     }
 
-    println!("Created tlconfig.lua and resound.d.tl");
+    if let Err(error) = fs::write(
+        project_dir.join("resound.d.tl"),
+        include_str!("../resound.d.tl"),
+    ) {
+        if created_tlconfig {
+            cleanup_created(std::slice::from_ref(&tlconfig_path), &error)?;
+        }
+        return Err(error.into());
+    }
+
+    println!("Initialized tlconfig.lua if missing and refreshed resound.d.tl");
     Ok(())
 }
 
@@ -254,15 +253,38 @@ mod tests {
     }
 
     #[test]
-    fn init_does_not_overwrite_existing_files() {
+    fn init_preserves_tlconfig_and_refreshes_declaration() {
+        let project_dir = temp_project_dir();
+        fs::write(project_dir.join("tlconfig.lua"), "existing config").unwrap();
+        fs::write(project_dir.join("resound.d.tl"), "existing").unwrap();
+
+        init_project(&project_dir).unwrap();
+        assert_eq!(
+            fs::read_to_string(project_dir.join("tlconfig.lua")).unwrap(),
+            "existing config"
+        );
+        assert_eq!(
+            fs::read_to_string(project_dir.join("resound.d.tl")).unwrap(),
+            include_str!("../resound.d.tl")
+        );
+
+        fs::remove_dir_all(project_dir).unwrap();
+    }
+
+    #[test]
+    fn init_creates_missing_tlconfig_even_when_declaration_exists() {
         let project_dir = temp_project_dir();
         fs::write(project_dir.join("resound.d.tl"), "existing").unwrap();
 
-        assert!(init_project(&project_dir).is_err());
-        assert!(!project_dir.join("tlconfig.lua").exists());
+        init_project(&project_dir).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(project_dir.join("tlconfig.lua")).unwrap(),
+            include_str!("../tlconfig.lua")
+        );
         assert_eq!(
             fs::read_to_string(project_dir.join("resound.d.tl")).unwrap(),
-            "existing"
+            include_str!("../resound.d.tl")
         );
 
         fs::remove_dir_all(project_dir).unwrap();

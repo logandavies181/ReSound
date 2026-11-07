@@ -81,7 +81,8 @@ Orchestrate a subcommand hierarchy, defaulting to `perform` if the first arg end
 
 ### init
 
-Creates `tlconfig.lua` and a complete `resound.d.tl` pitch declaration in the current directory. Existing files are not overwritten.
+Creates `tlconfig.lua` and a complete `resound.d.tl` pitch declaration in the current directory. Existing tlconfig.lua
+is not overwritten, but resound.d.tl is.
 
 ### list-plugins
 
