@@ -15,15 +15,13 @@ pub fn resolve(
     if instrument.r#type != InstrumentType::Vst {
         return Err(format!("instrument '{}' is not a VST instrument", instrument.name).into());
     }
-    let plugin_name = plugin_name(instrument);
     let (plugin_path, _, _) =
-        plugin_output::capture(|| select_plugin(simple::discover_plugins()?, plugin_name))?;
-    let preset_path = preset_path(instrument, project_dir)?;
+        plugin_output::capture(|| select_plugin(simple::discover_plugins()?, &instrument.plugin))?;
 
     Ok(VstInstrument {
         name: instrument.name.clone(),
         plugin_path,
-        preset_path,
+        preset_path: project_dir.join(&instrument.path),
         volume: instrument.volume,
     })
 }
@@ -52,33 +50,6 @@ pub fn show_plugin_parameters(plugin_name: &str) -> Result<Vec<(String, String)>
     Ok(parameters)
 }
 
-fn plugin_name(instrument: &InstrumentConfig) -> &str {
-    preset_plugin_name(&instrument.path).unwrap_or(&instrument.name)
-}
-
-fn preset_plugin_name(path: &Path) -> Option<&'static str> {
-    match path.extension()?.to_str()? {
-        "vital" => Some("Vital"),
-        "dexed" => Some("Dexed"),
-        _ => None,
-    }
-}
-
-fn preset_path(
-    instrument: &InstrumentConfig,
-    project_dir: &Path,
-) -> Result<std::path::PathBuf, Box<dyn Error>> {
-    if preset_plugin_name(&instrument.path).is_some() {
-        Ok(project_dir.join(&instrument.path))
-    } else {
-        Err(format!(
-            "VST instrument '{}' must use a .vital or .dexed preset file",
-            instrument.name
-        )
-        .into())
-    }
-}
-
 fn select_plugin(
     plugins: impl IntoIterator<Item = PluginInfo>,
     name: &str,
@@ -98,10 +69,9 @@ fn select_plugin(
 
 #[cfg(test)]
 mod tests {
-    use crate::luaapi::{InstrumentConfig, InstrumentType};
     use vst3_host::PluginInfo;
 
-    use super::{plugin_name, preset_path, select_plugin};
+    use super::select_plugin;
 
     #[test]
     fn selects_plugin_by_configured_file_name() {
@@ -136,55 +106,6 @@ mod tests {
             .unwrap_err()
             .to_string(),
             "VST3 plugin 'Configured Synth' was not found"
-        );
-    }
-
-    #[test]
-    fn vital_preset_selects_vital_and_uses_configured_path() {
-        let instrument = InstrumentConfig {
-            name: "my-patch".into(),
-            path: "presets/my-patch.vital".into(),
-            r#type: InstrumentType::Vst,
-            volume: 1.0,
-        };
-
-        assert_eq!(plugin_name(&instrument), "Vital");
-        assert_eq!(
-            preset_path(&instrument, std::path::Path::new("/project")).unwrap(),
-            std::path::PathBuf::from("/project/presets/my-patch.vital")
-        );
-    }
-
-    #[test]
-    fn dexed_preset_selects_dexed_and_uses_configured_path() {
-        let instrument = InstrumentConfig {
-            name: "my-patch".into(),
-            path: "presets/my-patch.dexed".into(),
-            r#type: InstrumentType::Vst,
-            volume: 1.0,
-        };
-
-        assert_eq!(plugin_name(&instrument), "Dexed");
-        assert_eq!(
-            preset_path(&instrument, std::path::Path::new("/project")).unwrap(),
-            std::path::PathBuf::from("/project/presets/my-patch.dexed")
-        );
-    }
-
-    #[test]
-    fn errors_when_vst_instrument_has_unsupported_preset_extension() {
-        let instrument = InstrumentConfig {
-            name: "synth".into(),
-            path: "plugins/synth.vst3".into(),
-            r#type: InstrumentType::Vst,
-            volume: 1.0,
-        };
-
-        assert_eq!(
-            preset_path(&instrument, std::path::Path::new("/project"))
-                .unwrap_err()
-                .to_string(),
-            "VST instrument 'synth' must use a .vital or .dexed preset file"
         );
     }
 

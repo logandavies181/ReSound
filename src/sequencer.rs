@@ -300,18 +300,21 @@ mod tests {
         let instruments = vec![
             InstrumentConfig {
                 name: "kick".into(),
+                plugin: String::new(),
                 path: "samples/kick.wav".into(),
                 r#type: InstrumentType::Wav,
                 volume: 1.0,
             },
             InstrumentConfig {
                 name: "synth".into(),
+                plugin: "Vital".into(),
                 path: "plugins/synth.vst3".into(),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
             },
             InstrumentConfig {
                 name: "snare".into(),
+                plugin: String::new(),
                 path: "drums/snare.wav".into(),
                 r#type: InstrumentType::Wav,
                 volume: 1.0,
@@ -349,6 +352,7 @@ mod tests {
             default_meter: 4.0,
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
+                plugin: "Vital".into(),
                 path: "synth.vst3".into(),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
@@ -429,6 +433,7 @@ mod tests {
             default_meter: 4.0,
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
+                plugin: "Vital".into(),
                 path: "synth.vital".into(),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
@@ -504,6 +509,7 @@ mod tests {
             default_meter: 4.0,
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
+                plugin: "Vital".into(),
                 path: "synth.vital".into(),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
@@ -566,6 +572,7 @@ mod tests {
             default_meter: 4.0,
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
+                plugin: "Vital".into(),
                 path: "synth.vital".into(),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,
@@ -599,18 +606,21 @@ mod tests {
             instruments: vec![
                 InstrumentConfig {
                     name: "vital".into(),
+                    plugin: "Vital".into(),
                     path: "vital.vital".into(),
                     r#type: InstrumentType::Vst,
                     volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "kick".into(),
+                    plugin: String::new(),
                     path: "kick.wav".into(),
                     r#type: InstrumentType::Wav,
                     volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "dexed".into(),
+                    plugin: "Dexed".into(),
                     path: "dexed.dexed".into(),
                     r#type: InstrumentType::Vst,
                     volume: 1.0,
@@ -673,6 +683,7 @@ mod tests {
         state.default_meter = 4.0;
         state.instruments.push(InstrumentConfig {
             name: "synth".into(),
+            plugin: "Vital".into(),
             path: "synth.vst3".into(),
             r#type: InstrumentType::Vst,
             volume: 1.0,
@@ -699,12 +710,14 @@ mod tests {
             instruments: vec![
                 InstrumentConfig {
                     name: "kick".into(),
+                    plugin: String::new(),
                     path: "kick.wav".into(),
                     r#type: InstrumentType::Wav,
                     volume: 1.0,
                 },
                 InstrumentConfig {
                     name: "snare".into(),
+                    plugin: String::new(),
                     path: "snare.wav".into(),
                     r#type: InstrumentType::Wav,
                     volume: 1.0,
@@ -760,6 +773,7 @@ mod tests {
         let state = LuaState {
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
+                plugin: "Vital".into(),
                 path: "synth.vst3".into(),
                 r#type: InstrumentType::Vst,
                 volume: 1.0,

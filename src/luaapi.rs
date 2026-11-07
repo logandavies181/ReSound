@@ -86,6 +86,7 @@ pub struct Duration {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InstrumentConfig {
     pub name: String,
+    pub plugin: String,
     pub path: PathBuf,
     pub r#type: InstrumentType,
     pub volume: f64,
@@ -95,16 +96,6 @@ pub struct InstrumentConfig {
 pub enum InstrumentType {
     Wav,
     Vst,
-}
-
-impl InstrumentType {
-    fn from_extension(extension: &str) -> Option<Self> {
-        match extension {
-            "wav" => Some(Self::Wav),
-            "vst" | "vst3" | "vital" | "dexed" => Some(Self::Vst),
-            _ => None,
-        }
-    }
 }
 
 pub fn execute_file(path: &Path) -> Result<LuaExecution, Box<dyn Error>> {
@@ -142,59 +133,60 @@ fn install_module(
     let instrument_state = Rc::clone(&state);
     module.set(
         "addInstrument",
-        lua.create_function(move |lua, (path, options): (String, Option<Table>)| {
-            let instrument_path = Path::new(&path);
-            let name = instrument_path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!(
-                        "instrument path has no valid file name: {}",
-                        instrument_path.display()
-                    ))
-                })?;
-            let extension = instrument_path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!(
-                        "instrument path has no file extension: {}",
-                        instrument_path.display()
-                    ))
-                })?;
-            let instrument_type = InstrumentType::from_extension(extension).ok_or_else(|| {
-                mlua::Error::RuntimeError(format!(
-                    "unsupported instrument type '{extension}' in path: {}",
-                    instrument_path.display()
-                ))
-            })?;
-            let volume = options
-                .map(|options| options.raw_get::<Option<f64>>("volume"))
-                .transpose()?
-                .flatten()
-                .unwrap_or(1.0);
-            if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "instrument volume must be finite and between 0 and 1, got {volume}"
-                )));
-            }
-
+        lua.create_function(move |lua, config: Table| {
+            let name: String = config.raw_get("name")?;
+            let plugin: String = config.raw_get("plugin")?;
+            let preset: String = config.raw_get("preset")?;
+            let volume: f64 = config.raw_get("volume")?;
             let mut instrument_state = instrument_state.borrow_mut();
-            if instrument_state
+            ensure_unique_name(&instrument_state.instruments, &name)?;
+            instrument_state.instruments.push(InstrumentConfig {
+                name,
+                plugin,
+                path: PathBuf::from(preset),
+                r#type: InstrumentType::Vst,
+                volume: validate_volume(volume, "instrument")?,
+            });
+            loaded_module(lua)
+        })?,
+    )?;
+
+    let sample_state = Rc::clone(&state);
+    module.set(
+        "addSample",
+        lua.create_function(move |lua, config: Table| {
+            let name: String = config.raw_get("name")?;
+            let path: String = config.raw_get("path")?;
+            let volume: f64 = config.raw_get("volume")?;
+            let mut instrument_state = sample_state.borrow_mut();
+            ensure_unique_name(&instrument_state.instruments, &name)?;
+            instrument_state.instruments.push(InstrumentConfig {
+                name,
+                plugin: String::new(),
+                path: PathBuf::from(path),
+                r#type: InstrumentType::Wav,
+                volume: validate_volume(volume, "sample")?,
+            });
+            loaded_module(lua)
+        })?,
+    )?;
+
+    let copied_state = Rc::clone(&state);
+    module.set(
+        "copyInstrument",
+        lua.create_function(move |lua, (source_name, dest_name): (String, String)| {
+            let mut instrument_state = copied_state.borrow_mut();
+            let mut instrument = instrument_state
                 .instruments
                 .iter()
-                .any(|instrument| instrument.name == name)
-            {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "instrument name '{name}' is already configured"
-                )));
-            }
-            instrument_state.instruments.push(InstrumentConfig {
-                name: name.to_owned(),
-                path: PathBuf::from(path),
-                r#type: instrument_type,
-                volume,
-            });
+                .find(|instrument| instrument.name == source_name)
+                .cloned()
+                .ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!("unknown instrument '{source_name}'"))
+                })?;
+            ensure_unique_name(&instrument_state.instruments, &dest_name)?;
+            instrument.name = dest_name;
+            instrument_state.instruments.push(instrument);
             loaded_module(lua)
         })?,
     )?;
@@ -420,6 +412,24 @@ fn loaded_module(lua: &Lua) -> mlua::Result<Table> {
     loaded.get("resound")
 }
 
+fn validate_volume(volume: f64, kind: &str) -> mlua::Result<f64> {
+    if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+        return Err(mlua::Error::RuntimeError(format!(
+            "{kind} volume must be finite and between 0 and 1, got {volume}"
+        )));
+    }
+    Ok(volume)
+}
+
+fn ensure_unique_name(instruments: &[InstrumentConfig], name: &str) -> mlua::Result<()> {
+    if instruments.iter().any(|instrument| instrument.name == name) {
+        return Err(mlua::Error::RuntimeError(format!(
+            "instrument name '{name}' is already configured"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{InstrumentType, LuaState, execute_source};
@@ -429,8 +439,13 @@ mod tests {
         let state = execute_source(
             r#"
                 local resound = require("resound")
-                resound.addInstrument("samples/drums.wav", { volume = 0 })
-                    .addInstrument("plugins/synth.vst3", { volume = 0.6 })
+                resound.addSample({name = "drums", path = "samples/drums.wav", volume = 0})
+                    .addInstrument({
+                        name = "synth",
+                        plugin = "Vital",
+                        preset = "presets/lead.vital",
+                        volume = 0.6,
+                    })
                     .setDefaultBpm(132)
             "#,
             "test.lua".into(),
@@ -443,13 +458,15 @@ mod tests {
                 instruments: vec![
                     super::InstrumentConfig {
                         name: "drums".into(),
+                        plugin: String::new(),
                         path: "samples/drums.wav".into(),
                         r#type: InstrumentType::Wav,
                         volume: 0.0,
                     },
                     super::InstrumentConfig {
                         name: "synth".into(),
-                        path: "plugins/synth.vst3".into(),
+                        plugin: "Vital".into(),
+                        path: "presets/lead.vital".into(),
                         r#type: InstrumentType::Vst,
                         volume: 0.6,
                     },
@@ -467,7 +484,12 @@ mod tests {
             let source = format!(
                 r#"
                     local resound = require("resound")
-                    resound.addInstrument("synth.vital", {{ volume = {volume} }})
+                    resound.addInstrument({{
+                        name = "synth",
+                        plugin = "Vital",
+                        preset = "synth.vital",
+                        volume = {volume},
+                    }})
                 "#
             );
             assert!(execute_source(&source, "test.lua".into()).is_err());
@@ -475,25 +497,45 @@ mod tests {
     }
 
     #[test]
-    fn rejects_instruments_with_unsupported_extensions() {
+    fn uses_explicit_plugin_and_allows_any_preset_extension() {
         let error = execute_source(
-            r#"require("resound").addInstrument("plugins/synth.mp3")"#,
+            r#"
+                local resound = require("resound")
+                resound.addInstrument({
+                    name = "synth",
+                    plugin = "Configured Synth",
+                    preset = "presets/patch.custom",
+                    volume = 1,
+                })
+            "#,
             "test.lua".into(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.to_string().contains("unsupported instrument type"));
+        assert_eq!(error.instruments[0].plugin, "Configured Synth");
+        assert_eq!(
+            error.instruments[0].path,
+            std::path::PathBuf::from("presets/patch.custom")
+        );
     }
 
     #[test]
     fn accepts_dexed_presets_as_vst_instruments() {
         let state = execute_source(
-            r#"require("resound").addInstrument("presets/synth.dexed")"#,
+            r#"
+                require("resound").addInstrument({
+                    name = "synth",
+                    plugin = "Dexed",
+                    preset = "presets/synth.dexed",
+                    volume = 1,
+                })
+            "#,
             "test.lua".into(),
         )
         .unwrap();
 
         assert_eq!(state.instruments[0].r#type, InstrumentType::Vst);
+        assert_eq!(state.instruments[0].plugin, "Dexed");
         assert_eq!(
             state.instruments[0].path,
             std::path::PathBuf::from("presets/synth.dexed")
@@ -501,11 +543,83 @@ mod tests {
     }
 
     #[test]
+    fn copies_instrument_settings_under_a_new_unique_name() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument({
+                    name = "lead",
+                    plugin = "Vital",
+                    preset = "presets/lead.vital",
+                    volume = 0.6,
+                }).copyInstrument("lead", "lead_quiet")
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.instruments.len(), 2);
+        assert_eq!(state.instruments[1].name, "lead_quiet");
+        assert_eq!(state.instruments[1].plugin, "Vital");
+        assert_eq!(
+            state.instruments[1].path,
+            std::path::PathBuf::from("presets/lead.vital")
+        );
+        assert_eq!(state.instruments[1].volume, 0.6);
+    }
+
+    #[test]
+    fn rejects_duplicate_names_across_instruments_and_samples() {
+        let error = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument({
+                    name = "kick",
+                    plugin = "Vital",
+                    preset = "kick.vital",
+                    volume = 1,
+                }).addSample({name = "kick", path = "kick.wav", volume = 1})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("instrument name 'kick' is already configured")
+        );
+    }
+
+    #[test]
+    fn rejects_copying_unknown_instruments_and_duplicate_destination_names() {
+        for setup in [
+            r#"resound.copyInstrument("missing", "copy")"#,
+            r#"
+                resound.addInstrument({
+                    name = "lead",
+                    plugin = "Vital",
+                    preset = "lead.vital",
+                    volume = 1,
+                }).copyInstrument("lead", "lead")
+            "#,
+        ] {
+            let source = format!(r#"local resound = require("resound"); {setup}"#);
+            assert!(execute_source(&source, "test.lua".into()).is_err());
+        }
+    }
+
+    #[test]
     fn set_param_value_records_initial_vst_parameter_values() {
         let execution = execute_source(
             r#"
                 local resound = require("resound")
-                resound.addInstrument("synth.vital")
+                resound.addInstrument({
+                    name = "synth",
+                    plugin = "Vital",
+                    preset = "synth.vital",
+                    volume = 1,
+                })
                     .setParamValue("synth", "lfo_rate", 0.75)
             "#,
             "test.lua".into(),
@@ -527,7 +641,12 @@ mod tests {
         let execution = execute_source(
             r#"
                 local resound = require("resound")
-                resound.addInstrument("synth.vital")
+                resound.addInstrument({
+                    name = "synth",
+                    plugin = "Vital",
+                    preset = "synth.vital",
+                    volume = 1,
+                })
                 local effect = function(t, playing)
                     resound.setParamValue("synth", "cutoff", playing and 0.8 or 0.1)
                 end
@@ -563,12 +682,12 @@ mod tests {
                 "unknown instrument 'missing'",
             ),
             (
-                r#"resound.addInstrument("drums.wav")"#,
+                r#"resound.addSample({name = "drums", path = "drums.wav", volume = 1})"#,
                 r#"resound.setParamValue("drums", "param", 0.5)"#,
                 "not a VST instrument",
             ),
             (
-                r#"resound.addInstrument("synth.vital")"#,
+                r#"resound.addInstrument({name = "synth", plugin = "Vital", preset = "synth.vital", volume = 1})"#,
                 r#"resound.setParamValue("synth", "param", 1.5)"#,
                 "between 0 and 1",
             ),
@@ -633,7 +752,12 @@ mod tests {
                 assert(#rest.pitches == 0)
                 assert(rest.duration.length == 1)
 
-                resound.addInstrument("synth.vital")
+                resound.addInstrument({
+                    name = "synth",
+                    plugin = "Vital",
+                    preset = "synth.vital",
+                    volume = 1,
+                })
                     .pushChords("synth", {rest}, {at = 1})
             "#,
             "test.lua".into(),
@@ -649,7 +773,12 @@ mod tests {
                 local effect = function(t, playing)
                     return t, playing
                 end
-                resound.addInstrument("synth.vital")
+                resound.addInstrument({
+                    name = "synth",
+                    plugin = "Vital",
+                    preset = "synth.vital",
+                    volume = 1,
+                })
                     .pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
             "#,
             "test.lua".into(),
@@ -707,12 +836,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_instrument_names() {
+    fn rejects_duplicate_sample_names() {
         let error = execute_source(
             r#"
                 local resound = require("resound")
-                resound.addInstrument("samples/kick.wav")
-                    .addInstrument("other/kick.wav")
+                resound.addSample({name = "kick", path = "samples/kick.wav", volume = 1})
+                    .addSample({name = "kick", path = "other/kick.wav", volume = 1})
             "#,
             "test.lua".into(),
         )

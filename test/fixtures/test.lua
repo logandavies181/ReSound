@@ -1,9 +1,29 @@
 local resound = require('resound')
 
-resound.addInstrument("test/fixtures/snare.wav")
-    .addInstrument("test/fixtures/test.vital")
-    .addInstrument("test/fixtures/sine.vital")
-    .addInstrument("test/fixtures/test2.dexed")
+resound
+    .addSample({
+        name = "snare",
+        path = "test/fixtures/snare.wav",
+        volume = 1,
+    })
+    .addInstrument({
+        name = "test",
+        plugin = "Vital",
+        preset = "test/fixtures/test.vital",
+        volume = 1,
+    })
+    .addInstrument({
+        name = "sine",
+        plugin = "Vital",
+        preset = "test/fixtures/sine.vital",
+        volume = 1,
+    })
+    .addInstrument({
+        name = "test2",
+        plugin = "Dexed",
+        preset = "test/fixtures/test2.dexed",
+        volume = 1,
+    })
     .setDefaultBpm(120)
     .setDefaultMeter(4)
     .pushChords("test", {

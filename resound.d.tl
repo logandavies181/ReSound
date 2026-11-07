@@ -1,9 +1,13 @@
 global record ReSound
   -- All the methods chain
 
-  --- Parses the path into a name and type, based on file extension. Optional volume is a linear 0..1 multiplier, default 1.
-  --- Instrument names must be unique.
-  addInstrument: function(path: string, ?InstrumentConfigInput): ReSound
+  --- Instrument names must be unique, but different instruments may load the same preset file.
+  addInstrument: function(InstrumentConfig): ReSound
+
+  addSample: function(SampleConfig): ReSound
+
+  copyInstrument: function(sourceName: string, destName: string): ReSound
+
   setDefaultBpm: function(bpm: number): ReSound
   --- This is in terms of quarter notes, so 4/4 is just `4`. 5/8 is `1.25`.
   setDefaultMeter: function(barLength: number): ReSound
@@ -34,19 +38,15 @@ local _: ReSoundConfig = {}
 
 global record InstrumentConfig
   name: string
-  type: InstrumentType
+  plugin: string
+  preset: string -- Path to preset file.
   volume: number
 end
 
-global record InstrumentConfigInput
-  --- Linear output multiplier in the inclusive 0..1 range; defaults to 1.
-  volume: number|nil
-end
-
-global enum InstrumentType
-  "wav"
-  "vital"
-  "dexed"
+global record SampleConfig
+  name: string
+  path: string
+  volume: number
 end
 
 global record Chord
