@@ -92,7 +92,7 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
         )?;
     }
     write_wav(&input.output_path, &channels, SAMPLE_RATE as u32)?;
-    println!("Wrote {}", input.output_path.display());
+    println!("Wrote: {}", input.output_path.display());
     Ok(())
 }
 
