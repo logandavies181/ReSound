@@ -16,7 +16,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             print_usage();
             return Ok(());
         }
-        Some(first) if first.to_string_lossy().ends_with(".lua") => ("perform", &args[..]),
+        Some(first)
+            if first.to_string_lossy().ends_with(".lua")
+                || first.to_string_lossy().ends_with(".tl") =>
+        {
+            ("perform", &args[..])
+        }
         Some(first) if first == "perform" => ("perform", &args[1..]),
         Some(first) if first == "init" => ("init", &args[1..]),
         Some(first) if first == "list-plugins" => ("list-plugins", &args[1..]),
@@ -141,7 +146,7 @@ fn perform(args: &[OsString]) -> Result<(), Box<dyn Error>> {
                 script_path = PathBuf::from(&args[index]);
                 script_set = true;
             }
-            _ => return Err("perform accepts only one Lua file".into()),
+            _ => return Err("perform accepts only one Lua or Teal file".into()),
         }
         index += 1;
     }
@@ -207,7 +212,9 @@ fn resolve_from(base: &Path, path: &Path) -> PathBuf {
 }
 
 fn print_usage() {
-    println!("Usage: resound [perform] [FILE.lua] [-o|--output FILE.wav] [-f|--from-bar BAR]");
+    println!(
+        "Usage: resound [perform] [FILE.lua|FILE.tl] [-o|--output FILE.wav] [-f|--from-bar BAR]"
+    );
     println!("       resound init");
     println!("       resound list-plugins");
     println!("       resound show-parameters PLUGIN_NAME");

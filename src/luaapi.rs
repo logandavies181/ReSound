@@ -103,15 +103,44 @@ pub enum InstrumentType {
 }
 
 pub fn execute_file(path: &Path) -> Result<LuaExecution, Box<dyn Error>> {
-    let source = fs::read_to_string(path)?;
-    execute_source(&source, path.to_string_lossy().into_owned()).map_err(Into::into)
+    let name = path.to_string_lossy().into_owned();
+    let (source, teal_path) = if path.extension().is_some_and(|extension| extension == "tl") {
+        let module_name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or("Teal script name must be valid UTF-8")?;
+        #[allow(deprecated)]
+        let compiler = tealr::embed_compiler!(Local());
+        (compiler(module_name), path.parent())
+    } else {
+        (fs::read_to_string(path)?, None)
+    };
+    execute_source_with_path(&source, name, teal_path).map_err(Into::into)
 }
 
 fn execute_source(source: &str, name: String) -> mlua::Result<LuaExecution> {
+    execute_source_with_path(source, name, None)
+}
+
+fn execute_source_with_path(
+    source: &str,
+    name: String,
+    teal_path: Option<&Path>,
+) -> mlua::Result<LuaExecution> {
     let lua = Lua::new();
     let state = Rc::new(RefCell::new(LuaState::default()));
     let parameter_values = Rc::new(RefCell::new(Vec::new()));
     install_module(&lua, Rc::clone(&state), Rc::clone(&parameter_values))?;
+
+    if let Some(teal_path) = teal_path {
+        let package: Table = lua.globals().get("package")?;
+        let package_path: String = package.get("path")?;
+        let teal_module_path = teal_path.join("?.tl");
+        package.set(
+            "path",
+            format!("{};{package_path}", teal_module_path.display()),
+        )?;
+    }
 
     lua.load(source).set_name(name).exec()?;
     let state = state.borrow().clone();
@@ -437,7 +466,7 @@ fn ensure_unique_name(instruments: &[InstrumentConfig], name: &str) -> mlua::Res
 
 #[cfg(test)]
 mod tests {
-    use super::{InstrumentType, LuaState, execute_source};
+    use super::{InstrumentType, LuaState, execute_file, execute_source};
 
     #[test]
     fn exposes_specified_chaining_api_and_collects_config() {
@@ -820,6 +849,17 @@ mod tests {
             "test.lua".into(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn executes_teal_files() {
+        let script_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/perform.tl");
+        let state = execute_file(&script_path).unwrap();
+        assert_eq!(state.chord_sets.len(), 1);
+        assert_eq!(state.chord_sets[0].chords.len(), 2);
+        assert_eq!(state.chord_sets[0].chords[0].pitches, vec!["c4"]);
+        assert_eq!(state.chord_sets[0].chords[1].pitches, vec!["e4"]);
     }
 
     #[test]

@@ -99,6 +99,8 @@ Plugin name - required. Name of the plugin as displayed in list-plugins
 
 ### perform
 
+Render Lua or Teal code into a .wav file.
+
 #### Args
 
 File name - default to main.lua. File to read from.
