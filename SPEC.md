@@ -65,8 +65,9 @@ names must be unique.
 `addInstrument(path, { volume = value })` optionally sets a per-instrument linear output multiplier from 0 to 1.
 It applies to both WAV and VST instruments, defaults to 1, and rejects non-finite or out-of-range values.
 
-A chord duration's ratio controls its gate length as a multiple of its rhythmic length. Ratios may exceed 1, so a note
-can ring past the next chord, which still starts on its normal schedule.
+A chord duration's optional `playLength` sets its gate length in quarter notes; when omitted, it defaults to the
+chord's rhythmic `length`. A `playLength` longer than `length` lets a note ring past the next chord, which still starts
+on its normal schedule.
 
 Bars are automatically added as needed based on the output of the Lua State. Bars may be modified in terms of BPM and
 length in the future. For now they take on the default values as set in the user's Lua.

@@ -161,8 +161,8 @@ fn sequence_score_from_bar(
             let mut beat_offset = repetition as f64 * sequence_beats;
             for chord in &chord_set.chords {
                 let at_seconds = start_seconds + beat_offset * seconds_per_quarter;
-                let note_off_seconds =
-                    at_seconds + chord.duration.length * chord.duration.ratio * seconds_per_quarter;
+                let play_length = chord.duration.play_length.unwrap_or(chord.duration.length);
+                let note_off_seconds = at_seconds + play_length * seconds_per_quarter;
                 if !note_off_seconds.is_finite() {
                     return Err("chord gate extends beyond the supported timeline".into());
                 }
@@ -174,7 +174,7 @@ fn sequence_score_from_bar(
                             effect_fn: effect_fn.clone(),
                         });
                     }
-                    if chord.duration.ratio > 0.0 {
+                    if play_length > 0.0 {
                         for pitch in &chord.pitches {
                             match (instrument.r#type, pitch.as_str()) {
                                 (InstrumentType::Wav, "x") => {
@@ -243,10 +243,11 @@ fn validate_chord(chord: &Chord) -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    if !duration.ratio.is_finite() || duration.ratio < 0.0 {
+    if let Some(play_length) = duration.play_length
+        && (!play_length.is_finite() || play_length < 0.0)
+    {
         return Err(format!(
-            "chord duration ratio must be finite and non-negative, got {}",
-            duration.ratio
+            "chord play length must be finite and non-negative, got {play_length}"
         )
         .into());
     }
@@ -375,7 +376,7 @@ mod tests {
                     pitches: vec!["c4".into(), "e4".into()],
                     duration: Duration {
                         length: 1.0,
-                        ratio: 0.5,
+                        play_length: Some(0.5),
                     },
                     effect_fn: None,
                 },
@@ -383,7 +384,7 @@ mod tests {
                     pitches: Vec::new(),
                     duration: Duration {
                         length: 1.0,
-                        ratio: 1.0,
+                        play_length: Some(1.0),
                     },
                     effect_fn: None,
                 },
@@ -391,7 +392,7 @@ mod tests {
                     pitches: vec!["g4".into()],
                     duration: Duration {
                         length: 2.0,
-                        ratio: 1.0,
+                        play_length: Some(2.0),
                     },
                     effect_fn: None,
                 },
@@ -454,7 +455,7 @@ mod tests {
                         pitches: vec!["c4".into()],
                         duration: Duration {
                             length: 4.0,
-                            ratio: 2.0,
+                            play_length: Some(8.0),
                         },
                         effect_fn: Some(effect_fn.clone()),
                     }],
@@ -467,7 +468,7 @@ mod tests {
                         pitches: vec!["d4".into()],
                         duration: Duration {
                             length: 1.0,
-                            ratio: 1.0,
+                            play_length: Some(1.0),
                         },
                         effect_fn: Some(effect_fn),
                     }],
@@ -510,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_ratio_can_exceed_one_without_delaying_the_next_chord() {
+    fn play_length_can_exceed_rhythmic_length_without_delaying_the_next_chord() {
         let state = LuaState {
             default_bpm: 120.0,
             default_meter: 4.0,
@@ -530,7 +531,7 @@ mod tests {
                         pitches: vec!["c4".into()],
                         duration: Duration {
                             length: 0.5,
-                            ratio: 3.0,
+                            play_length: Some(1.5),
                         },
                         effect_fn: None,
                     },
@@ -538,7 +539,7 @@ mod tests {
                         pitches: vec!["d4".into()],
                         duration: Duration {
                             length: 0.5,
-                            ratio: 1.0,
+                            play_length: Some(0.5),
                         },
                         effect_fn: None,
                     },
@@ -592,7 +593,7 @@ mod tests {
                     pitches: vec!["c4".into()],
                     duration: Duration {
                         length: 1.0,
-                        ratio: 0.5,
+                        play_length: Some(0.5),
                     },
                     effect_fn: Some(effect_fn),
                 }],
@@ -642,7 +643,7 @@ mod tests {
                         pitches: vec!["c4".into()],
                         duration: Duration {
                             length: 1.0,
-                            ratio: 1.0,
+                            play_length: Some(1.0),
                         },
                         effect_fn: None,
                     }],
@@ -655,7 +656,7 @@ mod tests {
                         pitches: vec!["d4".into()],
                         duration: Duration {
                             length: 1.0,
-                            ratio: 1.0,
+                            play_length: Some(1.0),
                         },
                         effect_fn: None,
                     }],
@@ -703,7 +704,7 @@ mod tests {
                 pitches: vec!["bs9".into()],
                 duration: Duration {
                     length: 1.0,
-                    ratio: 1.0,
+                    play_length: Some(1.0),
                 },
                 effect_fn: None,
             }],
@@ -738,7 +739,7 @@ mod tests {
                     pitches: vec!["x".into()],
                     duration: Duration {
                         length: 1.0,
-                        ratio: 1.0,
+                        play_length: Some(1.0),
                     },
                     effect_fn: None,
                 }],
@@ -776,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_gate_ratio_is_silent_but_advances_timeline() {
+    fn zero_play_length_is_silent_but_advances_timeline() {
         let state = LuaState {
             instruments: vec![InstrumentConfig {
                 name: "synth".into(),
@@ -793,7 +794,7 @@ mod tests {
                     pitches: vec!["c4".into()],
                     duration: Duration {
                         length: 1.0,
-                        ratio: 0.0,
+                        play_length: Some(0.0),
                     },
                     effect_fn: None,
                 }],
@@ -805,6 +806,44 @@ mod tests {
         assert!(!score.iter().any(|event| matches!(
             event,
             ScoreEvent::NoteOn { .. } | ScoreEvent::NoteOff { .. }
+        )));
+    }
+
+    #[test]
+    fn omitted_play_length_defaults_to_rhythmic_length() {
+        let state = LuaState {
+            default_bpm: 120.0,
+            instruments: vec![InstrumentConfig {
+                name: "synth".into(),
+                plugin: "Vital".into(),
+                path: Some("synth.vst3".into()),
+                r#type: InstrumentType::Vst,
+                volume: 1.0,
+            }],
+            chord_sets: vec![ChordSet {
+                instrument_name: "synth".into(),
+                at: 1.0,
+                times: None,
+                chords: vec![Chord {
+                    pitches: vec!["c4".into()],
+                    duration: Duration {
+                        length: 1.0,
+                        play_length: None,
+                    },
+                    effect_fn: None,
+                }],
+            }],
+            ..LuaState::default()
+        };
+
+        let (score, _, _) = sequence_score_from_bar(&state, 1).unwrap();
+        assert!(score.iter().any(|event| matches!(
+            event,
+            ScoreEvent::NoteOff {
+                at_seconds: 0.5,
+                note: 60,
+                ..
+            }
         )));
     }
 }

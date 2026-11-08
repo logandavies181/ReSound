@@ -80,7 +80,7 @@ pub struct Chord {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Duration {
     pub length: f64,
-    pub ratio: f64,
+    pub play_length: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -337,11 +337,11 @@ fn create_chord(
     effect_fn: Option<Function>,
 ) -> mlua::Result<Table> {
     let length: f64 = tuple.raw_get(1)?;
-    let ratio: Option<f64> = tuple.raw_get(2)?;
+    let play_length: Option<f64> = tuple.raw_get(2)?;
     let pitches_table = lua.create_sequence_from(pitches)?;
     let duration = lua.create_table()?;
     duration.set("length", length)?;
-    duration.set("ratio", ratio.unwrap_or(1.0))?;
+    duration.set("playLength", play_length)?;
     let chord = lua.create_table()?;
     chord.set("pitches", pitches_table)?;
     chord.set("duration", duration)?;
@@ -359,7 +359,7 @@ fn parse_chord(chord: &Table) -> mlua::Result<Chord> {
         pitches,
         duration: Duration {
             length: duration.raw_get("length")?,
-            ratio: duration.raw_get("ratio")?,
+            play_length: duration.raw_get("playLength")?,
         },
         effect_fn: chord.raw_get("effectFn")?,
     })
@@ -768,17 +768,17 @@ mod tests {
                 local note = n(c4, {2})
                 assert(note.pitches[1] == "c4")
                 assert(note.duration.length == 2)
-                assert(note.duration.ratio == 1)
+                assert(note.duration.playLength == nil)
 
                 local octave = o(bs8, {1, 0.5})
                 assert(octave.pitches[1] == "bs9")
-                assert(octave.duration.ratio == 0.5)
+                assert(octave.duration.playLength == 0.5)
 
                 local chord = c({c4, e4, g4}, {4, 0.75})
                 assert(#chord.pitches == 3)
                 assert(chord.pitches[2] == "e4")
                 assert(chord.duration.length == 4)
-                assert(chord.duration.ratio == 0.75)
+                assert(chord.duration.playLength == 0.75)
 
                 local percussion = p({0.5})
                 assert(#percussion.pitches == 1)
@@ -864,7 +864,7 @@ mod tests {
                 pitches: vec!["c4".into()],
                 duration: super::Duration {
                     length: 1.0,
-                    ratio: 1.0,
+                    play_length: None,
                 },
                 effect_fn: None,
             }
