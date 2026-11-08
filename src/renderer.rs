@@ -100,19 +100,96 @@ fn read_wav_with_format(path: &Path) -> Result<(Vec<Vec<f32>>, u32), Box<dyn Err
     match vst3_host::audio::read_wav(path) {
         Ok(sample) => Ok(sample),
         Err(vst3_host::Error::Other(message)) if message.contains("unsupported format") => {
-            let format = match wav_format_description(path) {
+            let data = fs::read(path)?;
+            let format = match parse_wav_format(&data) {
                 Ok(format) => format,
-                Err(format_error) => format!("format metadata unavailable: {format_error}"),
+                Err(format_error) => {
+                    return Err(format!(
+                        "{}: {message}; format metadata unavailable: {format_error}",
+                        path.display()
+                    )
+                    .into());
+                }
             };
-            Err(format!("{}: {message}; file format: {format}", path.display()).into())
+            let is_pcm = format.format_tag == 1
+                || (format.format_tag == 0xfffe && format.subformat_tag == Some(1));
+            if is_pcm && format.bits_per_sample == 24 {
+                return format.decode_pcm_24(&data).map_err(Into::into);
+            }
+            Err(format!(
+                "{}: {message}; file format: {}. Supported formats: 32-bit IEEE float, \
+                 16-bit PCM, and 24-bit PCM",
+                path.display(),
+                format.description()
+            )
+            .into())
         }
         Err(error) => Err(error.into()),
     }
 }
 
-fn wav_format_description(path: &Path) -> Result<String, Box<dyn Error>> {
-    let data = fs::read(path)?;
+struct WavFormat {
+    format_tag: u16,
+    channels: u16,
+    sample_rate: u32,
+    bits_per_sample: u16,
+    subformat_tag: Option<u16>,
+    data_range: Option<(usize, usize)>,
+}
+
+impl WavFormat {
+    fn description(&self) -> String {
+        let format_name = match self.format_tag {
+            1 => "PCM",
+            3 => "IEEE float",
+            6 => "A-law",
+            7 => "mu-law",
+            0xfffe => "WAVE_FORMAT_EXTENSIBLE",
+            _ => "unknown",
+        };
+        let subformat = self
+            .subformat_tag
+            .map(|tag| {
+                let name = match tag {
+                    1 => "PCM",
+                    3 => "IEEE float",
+                    _ => "unknown",
+                };
+                format!(", {name} subformat 0x{tag:04X}")
+            })
+            .unwrap_or_default();
+        format!(
+            "format tag 0x{:04X} ({format_name}{subformat}), {} bits/sample, \
+             {} channel(s), {} Hz",
+            self.format_tag, self.bits_per_sample, self.channels, self.sample_rate
+        )
+    }
+
+    fn decode_pcm_24(&self, data: &[u8]) -> Result<(Vec<Vec<f32>>, u32), Box<dyn Error>> {
+        if self.channels == 0 {
+            return Err("invalid WAV: zero channels".into());
+        }
+        let (start, end) = self.data_range.ok_or("invalid WAV: no data chunk")?;
+        let channels = self.channels as usize;
+        let mut output = vec![Vec::new(); channels];
+        for frame in data[start..end].chunks_exact(3 * channels) {
+            for (channel, sample) in frame.chunks_exact(3).enumerate() {
+                let mut value =
+                    sample[0] as i32 | (sample[1] as i32) << 8 | (sample[2] as i32) << 16;
+                if value & 0x800000 != 0 {
+                    value |= !0xFFFFFF;
+                }
+                output[channel].push(value as f32 / 8_388_608.0);
+            }
+        }
+        Ok((output, self.sample_rate))
+    }
+}
+
+fn parse_wav_format(data: &[u8]) -> Result<WavFormat, Box<dyn Error>> {
     let mut position = 12usize;
+    let mut format: Option<WavFormat> = None;
+    let mut data_range = None;
 
     while position.checked_add(8).is_some_and(|end| end <= data.len()) {
         let chunk = &data[position..position + 4];
@@ -130,36 +207,31 @@ fn wav_format_description(path: &Path) -> Result<String, Box<dyn Error>> {
             let channels = u16::from_le_bytes(data[body + 2..body + 4].try_into()?);
             let sample_rate = u32::from_le_bytes(data[body + 4..body + 8].try_into()?);
             let bits_per_sample = u16::from_le_bytes(data[body + 14..body + 16].try_into()?);
-            let format_name = match format_tag {
-                1 => "PCM",
-                3 => "IEEE float",
-                6 => "A-law",
-                7 => "mu-law",
-                0xfffe => "WAVE_FORMAT_EXTENSIBLE",
-                _ => "unknown",
-            };
-            let subformat = if format_tag == 0xfffe && size >= 40 {
-                let subformat_tag = u16::from_le_bytes(data[body + 24..body + 26].try_into()?);
-                let subformat_name = match subformat_tag {
-                    1 => "PCM",
-                    3 => "IEEE float",
-                    _ => "unknown",
-                };
-                format!(", {subformat_name} subformat 0x{subformat_tag:04X}")
+            let subformat_tag = if format_tag == 0xfffe && size >= 40 {
+                Some(u16::from_le_bytes(data[body + 24..body + 26].try_into()?))
             } else {
-                String::new()
+                None
             };
-            return Ok(format!(
-                "format tag 0x{format_tag:04X} ({format_name}{subformat}), \
-                 {bits_per_sample} bits/sample, \
-                 {channels} channel(s), {sample_rate} Hz"
-            ));
+            format = Some(WavFormat {
+                format_tag,
+                channels,
+                sample_rate,
+                bits_per_sample,
+                subformat_tag,
+                data_range,
+            });
+        } else if chunk == b"data" {
+            data_range = Some((body, end.min(data.len())));
         }
 
-        position = end + (size & 1);
+        position = end
+            .checked_add(size & 1)
+            .ok_or("WAV chunk size exceeds the supported range")?;
     }
 
-    Err("WAV format chunk not found".into())
+    let mut format = format.ok_or("WAV format chunk not found")?;
+    format.data_range = data_range;
+    Ok(format)
 }
 
 fn run_effects(
@@ -601,7 +673,7 @@ mod tests {
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: 44_100,
-            bits_per_sample: 24,
+            bits_per_sample: 32,
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer = hound::WavWriter::create(&path, spec).unwrap();
@@ -612,6 +684,30 @@ mod tests {
         std::fs::remove_file(path).unwrap();
 
         assert!(error.contains("PCM subformat 0x0001"), "{error}");
-        assert!(error.contains("24 bits/sample"), "{error}");
+        assert!(error.contains("32 bits/sample"), "{error}");
+    }
+
+    #[test]
+    fn reads_stereo_24_bit_pcm_wav_files() {
+        let path =
+            std::env::temp_dir().join(format!("resound-24-bit-stereo-{}.wav", std::process::id()));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 24,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        writer.write_sample(8_388_607i32).unwrap();
+        writer.write_sample(-8_388_608i32).unwrap();
+        writer.finalize().unwrap();
+
+        let (channels, sample_rate) = read_wav_with_format(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(sample_rate, 44_100);
+        assert_eq!(channels.len(), 2);
+        assert!((channels[0][0] - (8_388_607.0 / 8_388_608.0)).abs() < f32::EPSILON);
+        assert_eq!(channels[1][0], -1.0);
     }
 }
