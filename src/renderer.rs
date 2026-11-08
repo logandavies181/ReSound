@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::{error::Error, fs};
+use std::{error::Error, fs, path::Path};
 
 use vst3_host::{
     Plugin, StateContext,
@@ -19,8 +19,8 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     let samples = input
         .samples
         .iter()
-        .map(|sample| vst3_host::audio::read_wav(&sample.path))
-        .collect::<vst3_host::Result<Vec<_>>>()?;
+        .map(|sample| read_wav_with_format(&sample.path))
+        .collect::<Result<Vec<_>, _>>()?;
     let parameter_values = run_effects(
         &input.effects,
         SAMPLE_RATE,
@@ -94,6 +94,72 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     write_wav(&input.output_path, &channels, SAMPLE_RATE as u32)?;
     println!("Wrote: {}", input.output_path.display());
     Ok(())
+}
+
+fn read_wav_with_format(path: &Path) -> Result<(Vec<Vec<f32>>, u32), Box<dyn Error>> {
+    match vst3_host::audio::read_wav(path) {
+        Ok(sample) => Ok(sample),
+        Err(vst3_host::Error::Other(message)) if message.contains("unsupported format") => {
+            let format = match wav_format_description(path) {
+                Ok(format) => format,
+                Err(format_error) => format!("format metadata unavailable: {format_error}"),
+            };
+            Err(format!("{}: {message}; file format: {format}", path.display()).into())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn wav_format_description(path: &Path) -> Result<String, Box<dyn Error>> {
+    let data = fs::read(path)?;
+    let mut position = 12usize;
+
+    while position.checked_add(8).is_some_and(|end| end <= data.len()) {
+        let chunk = &data[position..position + 4];
+        let size = u32::from_le_bytes(data[position + 4..position + 8].try_into()?) as usize;
+        let body = position + 8;
+        let Some(end) = body.checked_add(size) else {
+            return Err("WAV chunk size exceeds the supported range".into());
+        };
+        if chunk == b"fmt " {
+            if size < 16 || end > data.len() {
+                return Err("invalid WAV format chunk".into());
+            }
+
+            let format_tag = u16::from_le_bytes(data[body..body + 2].try_into()?);
+            let channels = u16::from_le_bytes(data[body + 2..body + 4].try_into()?);
+            let sample_rate = u32::from_le_bytes(data[body + 4..body + 8].try_into()?);
+            let bits_per_sample = u16::from_le_bytes(data[body + 14..body + 16].try_into()?);
+            let format_name = match format_tag {
+                1 => "PCM",
+                3 => "IEEE float",
+                6 => "A-law",
+                7 => "mu-law",
+                0xfffe => "WAVE_FORMAT_EXTENSIBLE",
+                _ => "unknown",
+            };
+            let subformat = if format_tag == 0xfffe && size >= 40 {
+                let subformat_tag = u16::from_le_bytes(data[body + 24..body + 26].try_into()?);
+                let subformat_name = match subformat_tag {
+                    1 => "PCM",
+                    3 => "IEEE float",
+                    _ => "unknown",
+                };
+                format!(", {subformat_name} subformat 0x{subformat_tag:04X}")
+            } else {
+                String::new()
+            };
+            return Ok(format!(
+                "format tag 0x{format_tag:04X} ({format_name}{subformat}), \
+                 {bits_per_sample} bits/sample, \
+                 {channels} channel(s), {sample_rate} Hz"
+            ));
+        }
+
+        position = end + (size & 1);
+    }
+
+    Err("WAV format chunk not found".into())
 }
 
 fn run_effects(
@@ -404,7 +470,7 @@ fn mix_samples(
 mod tests {
     use mlua::Lua;
 
-    use super::{mix_samples, run_effects};
+    use super::{mix_samples, read_wav_with_format, run_effects};
     use crate::renderer_input::{EffectSpan, ScoreEvent};
 
     #[test]
@@ -524,5 +590,28 @@ mod tests {
         mix_samples(&mut output, &[vec![0.8]], 1, 1.0, &score, 0, 0.25).unwrap();
 
         assert_eq!(output, vec![vec![0.2]]);
+    }
+
+    #[test]
+    fn reports_the_format_of_unsupported_wav_files() {
+        let path = std::env::temp_dir().join(format!(
+            "resound-unsupported-format-{}.wav",
+            std::process::id()
+        ));
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 24,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        writer.write_sample(0i32).unwrap();
+        writer.finalize().unwrap();
+
+        let error = read_wav_with_format(&path).unwrap_err().to_string();
+        std::fs::remove_file(path).unwrap();
+
+        assert!(error.contains("PCM subformat 0x0001"), "{error}");
+        assert!(error.contains("24 bits/sample"), "{error}");
     }
 }
