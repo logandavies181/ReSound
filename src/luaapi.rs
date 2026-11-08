@@ -118,6 +118,7 @@ pub fn execute_file(path: &Path) -> Result<LuaExecution, Box<dyn Error>> {
     execute_source_with_path(&source, name, teal_path).map_err(Into::into)
 }
 
+#[allow(unused)]
 fn execute_source(source: &str, name: String) -> mlua::Result<LuaExecution> {
     execute_source_with_path(source, name, None)
 }
