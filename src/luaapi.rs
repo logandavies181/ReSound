@@ -839,13 +839,20 @@ mod tests {
     fn loads_teal_library_functions() {
         execute_source(
             r#"
-                local first, second = strum({c4, e4}, {1})
+                local chords = strum({c4, e4}, {1})
+                local first, second = chords[1], chords[2]
                 assert(first.pitches[1] == "c4")
                 assert(first.duration.length == 0.1)
                 assert(first.duration.playLength == 1)
                 assert(second.pitches[1] == "e4")
                 assert(second.duration.length == 0.9)
                 assert(second.duration.playLength == 0.9)
+
+                local flattened = straighten({
+                    {n(c4, {1}), n(e4, {1})},
+                    n(g4, {1}),
+                })
+                assert(#flattened == 3)
             "#,
             "test.lua".into(),
         )
