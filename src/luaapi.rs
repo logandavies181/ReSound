@@ -9,6 +9,10 @@ use std::{
 
 use mlua::{Function, Lua, Table};
 
+mod teal_lib {
+    include!(concat!(env!("OUT_DIR"), "/teal_lib.rs"));
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LuaState {
     pub instruments: Vec<InstrumentConfig>,
@@ -127,8 +131,11 @@ fn install_module(
     parameter_values: Rc<RefCell<Vec<ParameterValue>>>,
 ) -> mlua::Result<()> {
     install_pitch_globals(lua)?;
-    install_score_functions(lua)?;
     let module = lua.create_table()?;
+    let package: Table = lua.globals().get("package")?;
+    let loaded: Table = package.get("loaded")?;
+    loaded.set("resound", module.clone())?;
+    install_score_functions(lua)?;
 
     let instrument_state = Rc::clone(&state);
     module.set(
@@ -267,9 +274,6 @@ fn install_module(
         )?,
     )?;
 
-    let package: Table = lua.globals().get("package")?;
-    let loaded: Table = package.get("loaded")?;
-    loaded.set("resound", module)?;
     Ok(())
 }
 
@@ -284,7 +288,6 @@ fn install_pitch_globals(lua: &Lua) -> mlua::Result<()> {
 
 fn install_score_functions(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
-
     globals.set(
         "n",
         lua.create_function(
@@ -327,7 +330,7 @@ fn install_score_functions(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    Ok(())
+    lua.load(teal_lib::SOURCE).exec()
 }
 
 fn create_chord(
@@ -796,6 +799,23 @@ mod tests {
                     volume = 1,
                 })
                     .pushChords("synth", {rest}, {at = 1})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn loads_teal_library_functions() {
+        execute_source(
+            r#"
+                local first, second = strum({c4, e4}, {1})
+                assert(first.pitches[1] == "c4")
+                assert(first.duration.length == 0.1)
+                assert(first.duration.playLength == 1)
+                assert(second.pitches[1] == "e4")
+                assert(second.duration.length == 0.9)
+                assert(second.duration.playLength == 0.9)
             "#,
             "test.lua".into(),
         )

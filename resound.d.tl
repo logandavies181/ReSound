@@ -83,6 +83,9 @@ global p: function(DurationTuple, ?EffectFn): Chord -- No pitch, just the "x".
 --- Rest
 global r: function(DurationTuple, ?EffectFn): Chord -- No sounds, just used for adjusting timing.
 
+-- From lib.tl
+global strum: function(notes: {string}, input: DurationTuple): Chord...
+
 global enum Pitch
   -- an atonal percussion. mainly used to signal samples to play.
   "x"
