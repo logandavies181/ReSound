@@ -6,15 +6,26 @@ use crate::luaapi::{LuaState, ParameterValue};
 
 pub struct RendererInput {
     pub output_path: PathBuf,
+    pub cache_dir: PathBuf,
     pub vst: Vec<VstInstrument>,
     pub samples: Vec<SampleInstrument>,
     pub config: LuaState,
     pub render_duration_seconds: f64,
     pub score: Vec<ScoreEvent>,
+    pub cached_patterns: Vec<CachedPattern>,
     pub effects: Vec<EffectSpan>,
     pub initial_parameter_values: Vec<ParameterValue>,
     pub(crate) parameter_values: std::rc::Rc<std::cell::RefCell<Vec<ParameterValue>>>,
     pub(crate) _lua: Lua,
+}
+
+#[derive(Debug)]
+pub struct CachedPattern {
+    pub key: String,
+    pub vst_index: usize,
+    pub start_seconds: Vec<f64>,
+    pub duration_seconds: f64,
+    pub score: Vec<ScoreEvent>,
 }
 
 #[derive(Debug)]

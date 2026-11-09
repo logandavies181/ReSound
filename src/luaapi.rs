@@ -72,6 +72,7 @@ pub struct ChordSet {
     pub chords: Vec<Chord>,
     pub at: f64,
     pub times: Option<f64>,
+    pub cache_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -293,11 +294,13 @@ fn install_module(
                     .collect::<mlua::Result<Vec<_>>>()?;
                 let at = options.raw_get("at")?;
                 let times = options.raw_get("times")?;
+                let cache_key = create_cache_key(&instrument_name, &chords);
                 chords_state.borrow_mut().chord_sets.push(ChordSet {
                     instrument_name,
                     chords,
                     at,
                     times,
+                    cache_key,
                 });
                 loaded_module(lua)
             },
@@ -305,6 +308,36 @@ fn install_module(
     )?;
 
     Ok(())
+}
+
+fn create_cache_key(instrument_name: &str, chords: &[Chord]) -> Option<String> {
+    if chords.iter().any(|chord| chord.effect_fn.is_some()) {
+        return None;
+    }
+
+    let mut key = format!(
+        "v1|{}:{instrument_name}|{}",
+        instrument_name.len(),
+        chords.len()
+    );
+    for chord in chords {
+        key.push_str(&format!(
+            "|{}:{}:{:016x}:",
+            chord.pitches.len(),
+            chord.duration.length.to_bits(),
+            chord.duration.play_length.map(f64::to_bits).unwrap_or(0)
+        ));
+        if chord.duration.play_length.is_some() {
+            key.push('1');
+        } else {
+            key.push('0');
+        }
+        for pitch in &chord.pitches {
+            key.push_str(&format!("|{}:{pitch}", pitch.len()));
+        }
+    }
+
+    Some(key)
 }
 
 fn install_pitch_globals(lua: &Lua) -> mlua::Result<()> {
@@ -938,6 +971,50 @@ mod tests {
             }
         );
         assert!(state.chord_sets[0].chords[1].pitches.is_empty());
+    }
+
+    #[test]
+    fn creates_reusable_cache_keys_independent_of_bar_and_repeat_count() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument({
+                    name = "synth",
+                    plugin = "Vital",
+                    preset = "synth.vital",
+                    volume = 1,
+                })
+                resound.pushChords("synth", {n(c4, {1})}, {at = 1, times = 2})
+                resound.pushChords("synth", {n(c4, {1})}, {at = 4})
+                resound.pushChords("synth", {n(d4, {1})}, {at = 4})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.chord_sets[0].cache_key, state.chord_sets[1].cache_key);
+        assert_ne!(state.chord_sets[1].cache_key, state.chord_sets[2].cache_key);
+    }
+
+    #[test]
+    fn effect_chords_are_not_cacheable() {
+        let state = execute_source(
+            r#"
+                local resound = require("resound")
+                resound.addInstrument({
+                    name = "synth",
+                    plugin = "Vital",
+                    preset = "synth.vital",
+                    volume = 1,
+                })
+                local effect = function() end
+                resound.pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
+            "#,
+            "test.lua".into(),
+        )
+        .unwrap();
+
+        assert_eq!(state.chord_sets[0].cache_key, None);
     }
 
     #[test]

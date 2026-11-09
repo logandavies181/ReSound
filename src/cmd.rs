@@ -252,8 +252,8 @@ mod tests {
             .next()
             .unwrap();
         assert_eq!(pitches.matches("  \"").count(), 211);
-        assert!(declaration.contains("global cb0 = \"cb0\""));
-        assert!(declaration.contains("global bs9 = \"bs9\""));
+        assert!(declaration.contains("global cb0: Pitch = \"cb0\""));
+        assert!(declaration.contains("global bs9: Pitch = \"bs9\""));
         assert!(!declaration.contains("And so on"));
 
         fs::remove_dir_all(project_dir).unwrap();

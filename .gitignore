@@ -1,3 +1,4 @@
 /target
 *.wav
+.resound-cache/
 test/outputs

@@ -1,5 +1,11 @@
 use std::collections::HashMap;
-use std::{error::Error, fs, path::Path};
+use std::{
+    error::Error,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use vst3_host::{
     Plugin, StateContext,
@@ -9,10 +15,13 @@ use vst3_host::{
 };
 
 use crate::plugin_output;
-use crate::renderer_input::{EffectSpan, RendererInput, ScoreEvent, TimedParameterValue};
+use crate::renderer_input::{
+    CachedPattern, EffectSpan, RendererInput, ScoreEvent, TimedParameterValue, VstInstrument,
+};
 
 const SAMPLE_RATE: f64 = 44_100.0;
 const BLOCK_SIZE: usize = 512;
+static NEXT_CACHE_TEMP: AtomicUsize = AtomicUsize::new(0);
 
 pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     let _ = &input.config;
@@ -30,32 +39,65 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     )?;
     let mut rendered_plugins = Vec::with_capacity(input.vst.len());
     for (vst_index, vst) in input.vst.iter().enumerate() {
-        let (mut rendered, _, _) = plugin_output::capture(|| {
-            let mut plugin =
-                simple::load_plugin_with_settings(&vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
-            if let Some(preset_path) = &vst.preset_path {
-                let preset = fs::read(preset_path)?;
-                plugin.load_state_with_context(
-                    &preset,
-                    &StateContext::preset_from_path(preset_path),
-                )?;
+        let patterns = input
+            .cached_patterns
+            .iter()
+            .filter(|pattern| pattern.vst_index == vst_index)
+            .collect::<Vec<_>>();
+        let has_uncached_notes = input.score.iter().any(|event| match event {
+            ScoreEvent::NoteOn {
+                vst_index: event_vst_index,
+                ..
             }
-            for value in input
-                .initial_parameter_values
-                .iter()
-                .filter(|value| value.instrument_name == vst.name)
-            {
-                plugin.set_parameter_by_name(&value.parameter_name, value.value)?;
-            }
-            render_score(
-                &mut plugin,
+            | ScoreEvent::NoteOff {
+                vst_index: event_vst_index,
+                ..
+            } => *event_vst_index == vst_index,
+            ScoreEvent::PlaySample { .. } => false,
+        });
+        let mut rendered = if has_uncached_notes || patterns.is_empty() {
+            Some(render_vst_score(
+                vst,
                 vst_index,
-                &vst.name,
-                &parameter_values,
                 &input,
+                &parameter_values,
+                &input.score,
+                input.render_duration_seconds,
                 &samples,
-            )
-        })?;
+            )?)
+        } else {
+            None
+        };
+
+        for pattern in patterns {
+            let cache_key = audio_cache_key(pattern, vst, &input)?;
+            let pattern_audio = load_or_render_audio(&input.cache_dir, &cache_key, || {
+                render_vst_score(
+                    vst,
+                    vst_index,
+                    &input,
+                    &parameter_values,
+                    &pattern.score,
+                    pattern.duration_seconds,
+                    &samples,
+                )
+            })?;
+            let rendered_channels = rendered.get_or_insert_with(|| {
+                vec![
+                    vec![0.0; (input.render_duration_seconds * SAMPLE_RATE).ceil() as usize];
+                    pattern_audio.len()
+                ]
+            });
+            for start_seconds in &pattern.start_seconds {
+                mix_channels_at(
+                    rendered_channels,
+                    &pattern_audio,
+                    event_frame(*start_seconds, SAMPLE_RATE),
+                );
+            }
+        }
+
+        let mut rendered = rendered.ok_or("VST instrument produced no render output")?;
         for channel in &mut rendered {
             for value in channel {
                 *value *= vst.volume as f32;
@@ -96,6 +138,43 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn render_vst_score(
+    vst: &VstInstrument,
+    vst_index: usize,
+    input: &RendererInput,
+    parameter_values: &[TimedParameterValue],
+    score: &[ScoreEvent],
+    duration_seconds: f64,
+    samples: &[(Vec<Vec<f32>>, u32)],
+) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
+    let (rendered, _, _) = plugin_output::capture(|| {
+        let mut plugin =
+            simple::load_plugin_with_settings(&vst.plugin_path, SAMPLE_RATE, BLOCK_SIZE)?;
+        if let Some(preset_path) = &vst.preset_path {
+            let preset = fs::read(preset_path)?;
+            plugin
+                .load_state_with_context(&preset, &StateContext::preset_from_path(preset_path))?;
+        }
+        for value in input
+            .initial_parameter_values
+            .iter()
+            .filter(|value| value.instrument_name == vst.name)
+        {
+            plugin.set_parameter_by_name(&value.parameter_name, value.value)?;
+        }
+        render_score(
+            &mut plugin,
+            vst_index,
+            &vst.name,
+            parameter_values,
+            score,
+            duration_seconds,
+            samples,
+        )
+    })?;
+    Ok(rendered)
+}
+
 fn read_wav_with_format(path: &Path) -> Result<(Vec<Vec<f32>>, u32), Box<dyn Error>> {
     match vst3_host::audio::read_wav(path) {
         Ok(sample) => Ok(sample),
@@ -125,6 +204,206 @@ fn read_wav_with_format(path: &Path) -> Result<(Vec<Vec<f32>>, u32), Box<dyn Err
             .into())
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+fn audio_cache_key(
+    pattern: &CachedPattern,
+    vst: &VstInstrument,
+    input: &RendererInput,
+) -> Result<String, Box<dyn Error>> {
+    let plugin_metadata = fs::metadata(&vst.plugin_path)?;
+    let plugin_modified = plugin_metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let mut key = format!(
+        "v1|{}|{}|{}|{}|{:016x}|{:016x}|{:016x}",
+        pattern.key,
+        vst.plugin_path.display(),
+        plugin_metadata.len(),
+        plugin_modified,
+        input.config.default_bpm.to_bits(),
+        pattern.duration_seconds.to_bits(),
+        SAMPLE_RATE.to_bits()
+    );
+    if let Some(preset_path) = &vst.preset_path {
+        let preset = fs::read(preset_path)?;
+        key.push_str(&format!(
+            "|preset:{}:{}:{:016x}",
+            preset_path.display(),
+            preset.len(),
+            stable_hash(&preset)
+        ));
+    }
+    for value in input
+        .initial_parameter_values
+        .iter()
+        .filter(|value| value.instrument_name == vst.name)
+    {
+        key.push_str(&format!(
+            "|param:{}:{}:{:016x}",
+            value.parameter_name.len(),
+            value.parameter_name,
+            value.value.to_bits()
+        ));
+    }
+    Ok(key)
+}
+
+fn cache_path(cache_dir: &Path, key: &str) -> PathBuf {
+    cache_dir.join(format!("audio-{:016x}.bin", stable_hash(key.as_bytes())))
+}
+
+fn load_or_render_audio(
+    cache_dir: &Path,
+    key: &str,
+    render: impl FnOnce() -> Result<Vec<Vec<f32>>, Box<dyn Error>>,
+) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
+    let path = cache_path(cache_dir, key);
+    if let Some(audio) = read_cached_audio(&path, key)? {
+        return Ok(audio);
+    }
+
+    let audio = render()?;
+    write_cached_audio(cache_dir, &path, key, &audio)?;
+    Ok(audio)
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+fn read_cached_audio(path: &Path, key: &str) -> Result<Option<Vec<Vec<f32>>>, Box<dyn Error>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+
+    const MAGIC: &[u8; 8] = b"RSNDAC01";
+    if bytes.len() < MAGIC.len() + 8 || &bytes[..MAGIC.len()] != MAGIC {
+        return Ok(None);
+    }
+    let mut offset = MAGIC.len();
+    let Some(key_length) =
+        take_u64(&bytes, &mut offset).and_then(|length| usize::try_from(length).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(key_end) = offset.checked_add(key_length) else {
+        return Ok(None);
+    };
+    if key_end > bytes.len() || &bytes[offset..key_end] != key.as_bytes() {
+        return Ok(None);
+    }
+    offset = key_end;
+    let Some(channel_count) = take_u32(&bytes, &mut offset).map(|count| count as usize) else {
+        return Ok(None);
+    };
+    let Some(frame_count) =
+        take_u64(&bytes, &mut offset).and_then(|count| usize::try_from(count).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(sample_count) = channel_count.checked_mul(frame_count) else {
+        return Ok(None);
+    };
+    let Some(data_bytes) = sample_count.checked_mul(4) else {
+        return Ok(None);
+    };
+    if channel_count == 0 || bytes.len().saturating_sub(offset) != data_bytes {
+        return Ok(None);
+    }
+
+    let mut channels = vec![Vec::with_capacity(frame_count); channel_count];
+    for channel in &mut channels {
+        for _ in 0..frame_count {
+            let Some(sample) = take_u32(&bytes, &mut offset) else {
+                return Ok(None);
+            };
+            channel.push(f32::from_bits(sample));
+        }
+    }
+    Ok(Some(channels))
+}
+
+fn take_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let value = u32::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
+    *offset = end;
+    Some(value)
+}
+
+fn take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let value = u64::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
+    *offset = end;
+    Some(value)
+}
+
+fn write_cached_audio(
+    cache_dir: &Path,
+    path: &Path,
+    key: &str,
+    channels: &[Vec<f32>],
+) -> Result<(), Box<dyn Error>> {
+    fs::create_dir_all(cache_dir)?;
+    let frame_count = channels.first().map_or(0, Vec::len);
+    if channels.is_empty() || channels.iter().any(|channel| channel.len() != frame_count) {
+        return Err("cannot cache audio with inconsistent channel lengths".into());
+    }
+
+    let mut bytes = Vec::with_capacity(
+        24 + key.len() + channels.len() * frame_count * std::mem::size_of::<f32>(),
+    );
+    bytes.extend_from_slice(b"RSNDAC01");
+    bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(key.as_bytes());
+    bytes.extend_from_slice(&(channels.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(frame_count as u64).to_le_bytes());
+    for channel in channels {
+        for sample in channel {
+            bytes.extend_from_slice(&sample.to_bits().to_le_bytes());
+        }
+    }
+
+    let temporary_path = cache_dir.join(format!(
+        ".audio-{}-{}.tmp",
+        std::process::id(),
+        NEXT_CACHE_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&temporary_path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary_path, path)
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(temporary_path);
+    }
+    write_result?;
+    Ok(())
+}
+
+fn mix_channels_at(output: &mut [Vec<f32>], input: &[Vec<f32>], start_frame: usize) {
+    for (output_channel, output_samples) in output.iter_mut().enumerate() {
+        let Some(input_samples) = input.get(if input.len() == 1 {
+            0
+        } else {
+            output_channel.min(input.len().saturating_sub(1))
+        }) else {
+            continue;
+        };
+        let end_frame = start_frame.saturating_add(input_samples.len());
+        if end_frame > output_samples.len() {
+            output_samples.resize(end_frame, 0.0);
+        }
+        for (frame, input_sample) in input_samples.iter().enumerate() {
+            output_samples[start_frame + frame] += input_sample;
+        }
     }
 }
 
@@ -304,7 +583,8 @@ fn render_score(
     vst_index: usize,
     instrument_name: &str,
     parameter_values: &[TimedParameterValue],
-    input: &RendererInput,
+    score: &[ScoreEvent],
+    render_duration_seconds: f64,
     samples: &[(Vec<Vec<f32>>, u32)],
 ) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
     let layout = plugin.audio_bus_layout()?;
@@ -320,8 +600,7 @@ fn render_score(
         return Err("plugin has no active audio output channels".into());
     }
     let block_size = plugin.block_size().max(1);
-    let note_off_frames = input
-        .score
+    let note_off_frames = score
         .iter()
         .filter_map(|event| match event {
             ScoreEvent::NoteOff {
@@ -345,8 +624,7 @@ fn render_score(
             parameter_ids.insert(timed_value.value.parameter_name.clone(), parameter.id);
         }
     }
-    let sample_end_frames = input
-        .score
+    let sample_end_frames = score
         .iter()
         .filter_map(|event| match event {
             ScoreEvent::PlaySample {
@@ -361,7 +639,7 @@ fn render_score(
         })
         .max()
         .unwrap_or(0);
-    let total_frames = ((input.render_duration_seconds * output_sample_rate).ceil() as usize)
+    let total_frames = ((render_duration_seconds * output_sample_rate).ceil() as usize)
         .max(note_off_frames)
         .max(sample_end_frames);
 
@@ -373,7 +651,7 @@ fn render_score(
             let frames = block_size.min(total_frames - rendered);
             let block_end = rendered + frames;
 
-            for event in &input.score {
+            for event in score {
                 match *event {
                     ScoreEvent::NoteOn {
                         at_seconds,
@@ -542,7 +820,10 @@ fn mix_samples(
 mod tests {
     use mlua::Lua;
 
-    use super::{mix_samples, read_wav_with_format, run_effects};
+    use super::{
+        cache_path, load_or_render_audio, mix_samples, read_cached_audio, read_wav_with_format,
+        run_effects,
+    };
     use crate::renderer_input::{EffectSpan, ScoreEvent};
 
     #[test]
@@ -605,6 +886,42 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(1, 0.8), (2, 0.1)]
         );
+    }
+
+    #[test]
+    fn caches_rendered_audio_and_checks_the_full_cache_key() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cache_dir = std::env::temp_dir().join(format!(
+            "resound-audio-cache-{}-{unique}",
+            std::process::id()
+        ));
+        let path = cache_path(&cache_dir, "pattern-key");
+        let audio = vec![vec![0.125, -0.25], vec![0.5, 0.75]];
+        let mut render_count = 0;
+
+        let first = load_or_render_audio(&cache_dir, "pattern-key", || {
+            render_count += 1;
+            Ok(audio.clone())
+        })
+        .unwrap();
+        let second = load_or_render_audio(&cache_dir, "pattern-key", || {
+            render_count += 1;
+            Ok(Vec::new())
+        })
+        .unwrap();
+
+        assert_eq!(first, audio);
+        assert_eq!(second, first);
+        assert_eq!(render_count, 1);
+        assert_eq!(
+            read_cached_audio(&path, "pattern-key").unwrap(),
+            Some(first)
+        );
+        assert_eq!(read_cached_audio(&path, "different-key").unwrap(), None);
+        std::fs::remove_dir_all(cache_dir).unwrap();
     }
 
     #[test]
