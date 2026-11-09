@@ -28,7 +28,22 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     let samples = input
         .samples
         .iter()
-        .map(|sample| read_wav_with_format(&sample.path))
+        .enumerate()
+        .map(|(sample_index, sample)| {
+            if input.score.iter().any(|event| {
+                matches!(
+                    event,
+                    ScoreEvent::PlaySample {
+                        sample_index: event_sample_index,
+                        ..
+                    } if *event_sample_index == sample_index
+                )
+            }) {
+                read_wav_with_format(&sample.path)
+            } else {
+                Ok((Vec::new(), 0))
+            }
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let parameter_values = run_effects(
         &input.effects,
@@ -48,14 +63,10 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
             ScoreEvent::NoteOn {
                 vst_index: event_vst_index,
                 ..
-            }
-            | ScoreEvent::NoteOff {
-                vst_index: event_vst_index,
-                ..
             } => *event_vst_index == vst_index,
-            ScoreEvent::PlaySample { .. } => false,
+            ScoreEvent::NoteOff { .. } | ScoreEvent::PlaySample { .. } => false,
         });
-        let mut rendered = if has_uncached_notes || patterns.is_empty() {
+        let mut rendered = if has_uncached_notes {
             Some(render_vst_score(
                 vst,
                 vst_index,
@@ -97,25 +108,47 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let mut rendered = rendered.ok_or("VST instrument produced no render output")?;
-        for channel in &mut rendered {
-            for value in channel {
-                *value *= vst.volume as f32;
+        if let Some(mut rendered) = rendered {
+            for channel in &mut rendered {
+                for value in channel {
+                    *value *= vst.volume as f32;
+                }
             }
+            rendered_plugins.push(rendered);
         }
-        rendered_plugins.push(rendered);
     }
 
-    let output_channels = rendered_plugins
+    let plugin_channels = rendered_plugins.iter().map(Vec::len).max().unwrap_or(0);
+    let sample_channels = samples
         .iter()
-        .map(Vec::len)
+        .map(|(sample, _)| sample.len())
         .max()
-        .ok_or("no VST instrument configured")?;
-    let total_frames = rendered_plugins
+        .unwrap_or(0);
+    let output_channels = plugin_channels.max(sample_channels).max(2);
+    let plugin_frames = rendered_plugins
         .iter()
         .flat_map(|channels| channels.iter().map(Vec::len))
         .max()
         .unwrap_or(0);
+    let sample_end_frames = input
+        .score
+        .iter()
+        .filter_map(|event| match event {
+            ScoreEvent::PlaySample {
+                at_seconds,
+                sample_index,
+            } => samples.get(*sample_index).map(|(sample, sample_rate)| {
+                let frames = sample.iter().map(Vec::len).min().unwrap_or(0) as f64;
+                let duration = frames / (*sample_rate).max(1) as f64;
+                ((*at_seconds + duration) * SAMPLE_RATE).ceil() as usize
+            }),
+            ScoreEvent::NoteOn { .. } | ScoreEvent::NoteOff { .. } => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let total_frames = plugin_frames
+        .max(sample_end_frames)
+        .max((input.render_duration_seconds * SAMPLE_RATE).ceil() as usize);
     let mut channels = vec![vec![0.0; total_frames]; output_channels];
     for plugin_channels in rendered_plugins {
         mix_channels(&mut channels, &plugin_channels);
@@ -123,6 +156,9 @@ pub fn render(input: RendererInput) -> Result<(), Box<dyn Error>> {
     for (sample_index, ((sample, sample_rate), instrument)) in
         samples.iter().zip(&input.samples).enumerate()
     {
+        if sample.is_empty() {
+            continue;
+        }
         mix_samples(
             &mut channels,
             sample,
@@ -822,9 +858,12 @@ mod tests {
 
     use super::{
         cache_path, load_or_render_audio, mix_samples, read_cached_audio, read_wav_with_format,
-        run_effects,
+        render, run_effects,
     };
-    use crate::renderer_input::{EffectSpan, ScoreEvent};
+    use crate::{
+        luaapi::LuaState,
+        renderer_input::{EffectSpan, RendererInput, SampleInstrument, ScoreEvent, VstInstrument},
+    };
 
     #[test]
     fn evaluates_effect_each_sample_and_calls_once_after_gate() {
@@ -922,6 +961,107 @@ mod tests {
         );
         assert_eq!(read_cached_audio(&path, "different-key").unwrap(), None);
         std::fs::remove_dir_all(cache_dir).unwrap();
+    }
+
+    #[test]
+    fn skips_unused_vst_and_sample_files() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output_path = std::env::temp_dir().join(format!(
+            "resound-no-output-{}-{unique}.wav",
+            std::process::id()
+        ));
+        let input = RendererInput {
+            output_path: output_path.clone(),
+            cache_dir: output_path.with_extension("cache"),
+            vst: vec![VstInstrument {
+                name: "unused".into(),
+                plugin_path: output_path.with_extension("missing.vst3"),
+                preset_path: None,
+                volume: 1.0,
+            }],
+            samples: vec![SampleInstrument {
+                path: output_path.with_extension("missing.wav"),
+                volume: 1.0,
+            }],
+            config: LuaState::default(),
+            render_duration_seconds: 0.01,
+            score: Vec::new(),
+            cached_patterns: Vec::new(),
+            effects: Vec::new(),
+            initial_parameter_values: Vec::new(),
+            parameter_values: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            _lua: mlua::Lua::new(),
+        };
+
+        render(input).unwrap();
+
+        let (channels, sample_rate) = read_wav_with_format(&output_path).unwrap();
+        assert_eq!(sample_rate, super::SAMPLE_RATE as u32);
+        assert_eq!(channels.len(), 2);
+        assert!(
+            channels
+                .iter()
+                .all(|channel| channel.iter().all(|sample| *sample == 0.0))
+        );
+        std::fs::remove_file(output_path).unwrap();
+    }
+
+    #[test]
+    fn renders_samples_without_loading_unused_vst_instruments() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let stem = format!("resound-sample-only-{}-{unique}", std::process::id());
+        let sample_path = std::env::temp_dir().join(format!("{stem}-input.wav"));
+        let output_path = std::env::temp_dir().join(format!("{stem}-output.wav"));
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&sample_path, spec).unwrap();
+        writer.write_sample(16_384i16).unwrap();
+        writer.finalize().unwrap();
+
+        let input = RendererInput {
+            output_path: output_path.clone(),
+            cache_dir: output_path.with_extension("cache"),
+            vst: vec![VstInstrument {
+                name: "unused".into(),
+                plugin_path: output_path.with_extension("missing.vst3"),
+                preset_path: None,
+                volume: 1.0,
+            }],
+            samples: vec![SampleInstrument {
+                path: sample_path.clone(),
+                volume: 1.0,
+            }],
+            config: LuaState::default(),
+            render_duration_seconds: 0.01,
+            score: vec![ScoreEvent::PlaySample {
+                at_seconds: 0.0,
+                sample_index: 0,
+            }],
+            cached_patterns: Vec::new(),
+            effects: Vec::new(),
+            initial_parameter_values: Vec::new(),
+            parameter_values: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            _lua: mlua::Lua::new(),
+        };
+
+        render(input).unwrap();
+
+        let (channels, _) = read_wav_with_format(&output_path).unwrap();
+        assert_eq!(channels.len(), 2);
+        assert!((channels[0][0] - 0.5).abs() < 0.0001);
+        assert!((channels[1][0] - 0.5).abs() < 0.0001);
+        std::fs::remove_file(sample_path).unwrap();
+        std::fs::remove_file(output_path).unwrap();
     }
 
     #[test]

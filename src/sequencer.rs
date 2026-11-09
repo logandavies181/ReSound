@@ -20,16 +20,59 @@ pub fn sequence_from_bar(
         parameter_values,
         lua,
     } = execution;
-    let (score, score_duration, effects, cached_patterns) =
+    let (mut score, score_duration, effects, mut cached_patterns) =
         sequence_score_from_bar(&state, from_bar)?;
-    let vst = state
+    let vst_count = state
         .instruments
         .iter()
         .filter(|instrument| instrument.r#type == InstrumentType::Vst)
-        .map(|instrument| crate::vst_loader::resolve(instrument, project_dir))
-        .collect::<Result<Vec<_>, _>>()?;
-    if vst.is_empty() {
-        return Err("no VST instrument configured".into());
+        .count();
+    let mut active_vst = vec![false; vst_count];
+    for event in &score {
+        if let ScoreEvent::NoteOn { vst_index, .. } | ScoreEvent::NoteOff { vst_index, .. } = event
+            && let Some(active) = active_vst.get_mut(*vst_index)
+        {
+            *active = true;
+        }
+    }
+    for pattern in &cached_patterns {
+        if let Some(active) = active_vst.get_mut(pattern.vst_index) {
+            *active = true;
+        }
+    }
+
+    let mut vst = Vec::new();
+    let mut vst_remapping = vec![None; vst_count];
+    let mut vst_index = 0;
+    for instrument in &state.instruments {
+        if instrument.r#type != InstrumentType::Vst {
+            continue;
+        }
+        if active_vst[vst_index] {
+            vst_remapping[vst_index] = Some(vst.len());
+            vst.push(crate::vst_loader::resolve(instrument, project_dir)?);
+        }
+        vst_index += 1;
+    }
+    for event in &mut score {
+        let event_vst_index = match event {
+            ScoreEvent::NoteOn { vst_index, .. } | ScoreEvent::NoteOff { vst_index, .. } => {
+                Some(vst_index)
+            }
+            ScoreEvent::PlaySample { .. } => None,
+        };
+        if let Some(event_vst_index) = event_vst_index {
+            *event_vst_index = vst_remapping
+                .get(*event_vst_index)
+                .and_then(|mapped| *mapped)
+                .ok_or("score event references an inactive VST instrument")?;
+        }
+    }
+    for pattern in &mut cached_patterns {
+        pattern.vst_index = vst_remapping
+            .get(pattern.vst_index)
+            .and_then(|mapped| *mapped)
+            .ok_or("cached pattern references an inactive VST instrument")?;
     }
     let samples = collect_samples(&state.instruments, project_dir)?;
 
@@ -443,7 +486,9 @@ fn event_order(event: &ScoreEvent) -> (f64, u8) {
 
 #[cfg(test)]
 mod tests {
-    use crate::luaapi::{Chord, ChordSet, Duration, InstrumentConfig, InstrumentType, LuaState};
+    use crate::luaapi::{
+        Chord, ChordSet, Duration, InstrumentConfig, InstrumentType, LuaExecution, LuaState,
+    };
 
     use super::{collect_samples, pitch_to_midi, sequence_score_from_bar};
     use crate::renderer_input::ScoreEvent;
@@ -485,6 +530,50 @@ mod tests {
                 std::path::PathBuf::from("/project/drums/snare.wav")
             ]
         );
+    }
+
+    #[test]
+    fn does_not_resolve_vst_instruments_without_note_output() {
+        let execution = LuaExecution {
+            state: LuaState {
+                instruments: vec![InstrumentConfig {
+                    name: "unused".into(),
+                    plugin: "missing-plugin".into(),
+                    path: None,
+                    r#type: InstrumentType::Vst,
+                    volume: 1.0,
+                }],
+                chord_sets: vec![ChordSet {
+                    instrument_name: "unused".into(),
+                    at: 1.0,
+                    times: None,
+                    cache_key: None,
+                    chords: vec![Chord {
+                        pitches: Vec::new(),
+                        duration: Duration {
+                            length: 1.0,
+                            play_length: Some(1.0),
+                        },
+                        effect_fn: None,
+                    }],
+                }],
+                ..LuaState::default()
+            },
+            initial_parameter_values: Vec::new(),
+            parameter_values: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            lua: mlua::Lua::new(),
+        };
+
+        let input = super::sequence_from_bar(
+            execution,
+            std::path::Path::new("/project"),
+            "/project/output.wav",
+            1,
+        )
+        .unwrap();
+
+        assert!(input.vst.is_empty());
+        assert!(input.score.is_empty());
     }
 
     #[test]
