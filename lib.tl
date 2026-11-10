@@ -11,10 +11,34 @@ global function strum(notes: {Pitch}, input: DurationTuple): {Chord}
 
         local outputLen = (i == #notes) and (len - offset) or offsetSize
 
-        table.insert(ret, n(v as Pitch, {outputLen, playLen-offset}))
+        table.insert(ret, n(v, {outputLen, playLen-offset}))
     end
     return ret
 end
+
+global function pianoStrum(notes: {Pitch}, input: DurationTuple): {Chord}
+    local len = input[1]
+    local playLen = input[2] or len
+
+    local ret = {}
+    local currentOffset = 0.05
+    local totalOffset = 0.0
+
+    for i, v in ipairs(notes) do
+        if i == #notes then break end
+
+        local outputLen = currentOffset
+
+        table.insert(ret, n(v, {outputLen, playLen - totalOffset}))
+        totalOffset = totalOffset + currentOffset
+        currentOffset = 0.001
+    end
+
+    table.insert(ret, n(notes[#notes], {len - currentOffset, playLen - currentOffset}))
+
+    return ret
+end
+
 
 global function arpeggiate(notes: {Pitch}, input: DurationTuple, spacing: number): {Chord}
     local len = input[1]

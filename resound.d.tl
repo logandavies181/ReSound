@@ -85,6 +85,7 @@ global r: function(DurationTuple, ?EffectFn): Chord -- No sounds, just used for 
 
 -- From lib.tl
 global strum: function(notes: {Pitch}, input: DurationTuple): {Chord}
+global pianoStrum: function(notes: {Pitch}, input: DurationTuple): {Chord}
 global arpeggiate: function(notes: {Pitch}, input: DurationTuple, spacing: number): {Chord}
 global straighten: function(input: {any}): {Chord}
 -- End lib.tl
