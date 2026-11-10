@@ -84,8 +84,9 @@ global p: function(DurationTuple, ?EffectFn): Chord -- No pitch, just the "x".
 global r: function(DurationTuple, ?EffectFn): Chord -- No sounds, just used for adjusting timing.
 
 -- From lib.tl
-global strum: function(notes: {Pitch}, input: DurationTuple): {Chord}
+global strum: function(notes: {Pitch}, input: DurationTuple, lengths: {number}): {Chord}
 global pianoStrum: function(notes: {Pitch}, input: DurationTuple): {Chord}
+global delay: function(chords: {Chord}, delayLength?: number): {Chord}
 global arpeggiate: function(notes: {Pitch}, input: DurationTuple, spacing: number): {Chord}
 global straighten: function(input: {any}): {Chord}
 -- End lib.tl
