@@ -119,11 +119,6 @@ pub fn execute_file(path: &Path) -> Result<LuaExecution, Box<dyn Error>> {
     execute_source_with_path(&source, name, teal_path).map_err(Into::into)
 }
 
-#[allow(unused)]
-fn execute_source(source: &str, name: String) -> mlua::Result<LuaExecution> {
-    execute_source_with_path(source, name, None)
-}
-
 fn execute_source_with_path(
     source: &str,
     name: String,
@@ -500,25 +495,19 @@ fn ensure_unique_name(instruments: &[InstrumentConfig], name: &str) -> mlua::Res
 
 #[cfg(test)]
 mod tests {
-    use super::{InstrumentType, LuaState, execute_file, execute_source};
+    use std::path::{Path, PathBuf};
+
+    use super::{InstrumentType, LuaState, execute_file};
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test/fixtures/luaapi")
+            .join(name)
+    }
 
     #[test]
     fn exposes_specified_chaining_api_and_collects_config() {
-        let state = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addSample({name = "drums", path = "samples/drums.wav", volume = 0})
-                    .addInstrument({
-                        name = "synth",
-                        plugin = "Vital",
-                        preset = "presets/lead.vital",
-                        volume = 0.6,
-                    })
-                    .setDefaultBpm(132)
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("specified_chaining.lua")).unwrap();
 
         assert_eq!(
             state,
@@ -548,18 +537,7 @@ mod tests {
 
     #[test]
     fn defaults_missing_instrument_and_sample_volumes_to_one() {
-        let state = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "lead",
-                    plugin = "Vital",
-                    preset = "lead.vital",
-                }).addSample({name = "kick", path = "kick.wav"})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("default_volumes.lua")).unwrap();
 
         assert_eq!(state.instruments[0].volume, 1.0);
         assert_eq!(state.instruments[1].volume, 1.0);
@@ -567,75 +545,36 @@ mod tests {
 
     #[test]
     fn allows_vst_instrument_without_a_preset() {
-        let state = execute_source(
-            r#"
-                require("resound").addInstrument({
-                    name = "default_synth",
-                    plugin = "Vital",
-                })
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("vst_without_preset.lua")).unwrap();
 
         assert_eq!(state.instruments[0].path, None);
     }
 
     #[test]
     fn rejects_invalid_instrument_volume() {
-        for volume in ["-0.1", "1.1", "math.huge"] {
-            let source = format!(
-                r#"
-                    local resound = require("resound")
-                    resound.addInstrument({{
-                        name = "synth",
-                        plugin = "Vital",
-                        preset = "synth.vital",
-                        volume = {volume},
-                    }})
-                "#
-            );
-            assert!(execute_source(&source, "test.lua".into()).is_err());
+        for name in [
+            "negative_volume.lua",
+            "over_one_volume.lua",
+            "infinite_volume.lua",
+        ] {
+            assert!(execute_file(&fixture(name)).is_err());
         }
     }
 
     #[test]
     fn uses_explicit_plugin_and_allows_any_preset_extension() {
-        let error = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "synth",
-                    plugin = "Configured Synth",
-                    preset = "presets/patch.custom",
-                    volume = 1,
-                })
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("explicit_plugin_custom_preset.lua")).unwrap();
 
-        assert_eq!(error.instruments[0].plugin, "Configured Synth");
+        assert_eq!(state.instruments[0].plugin, "Configured Synth");
         assert_eq!(
-            error.instruments[0].path,
+            state.instruments[0].path,
             Some(std::path::PathBuf::from("presets/patch.custom"))
         );
     }
 
     #[test]
     fn accepts_dexed_presets_as_vst_instruments() {
-        let state = execute_source(
-            r#"
-                require("resound").addInstrument({
-                    name = "synth",
-                    plugin = "Dexed",
-                    preset = "presets/synth.dexed",
-                    volume = 1,
-                })
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("dexed_preset.lua")).unwrap();
 
         assert_eq!(state.instruments[0].r#type, InstrumentType::Vst);
         assert_eq!(state.instruments[0].plugin, "Dexed");
@@ -647,19 +586,7 @@ mod tests {
 
     #[test]
     fn copies_instrument_settings_under_a_new_unique_name() {
-        let state = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "lead",
-                    plugin = "Vital",
-                    preset = "presets/lead.vital",
-                    volume = 0.6,
-                }).copyInstrument("lead", "lead_quiet")
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("copy_instrument.lua")).unwrap();
 
         assert_eq!(state.instruments.len(), 2);
         assert_eq!(state.instruments[1].name, "lead_quiet");
@@ -673,19 +600,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_names_across_instruments_and_samples() {
-        let error = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "kick",
-                    plugin = "Vital",
-                    preset = "kick.vital",
-                    volume = 1,
-                }).addSample({name = "kick", path = "kick.wav", volume = 1})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap_err();
+        let error = execute_file(&fixture("duplicate_instrument_sample_name.lua")).unwrap_err();
 
         assert!(
             error
@@ -696,38 +611,17 @@ mod tests {
 
     #[test]
     fn rejects_copying_unknown_instruments_and_duplicate_destination_names() {
-        for setup in [
-            r#"resound.copyInstrument("missing", "copy")"#,
-            r#"
-                resound.addInstrument({
-                    name = "lead",
-                    plugin = "Vital",
-                    preset = "lead.vital",
-                    volume = 1,
-                }).copyInstrument("lead", "lead")
-            "#,
+        for name in [
+            "copy_unknown_instrument.lua",
+            "copy_duplicate_destination.lua",
         ] {
-            let source = format!(r#"local resound = require("resound"); {setup}"#);
-            assert!(execute_source(&source, "test.lua".into()).is_err());
+            assert!(execute_file(&fixture(name)).is_err());
         }
     }
 
     #[test]
     fn set_param_value_records_initial_vst_parameter_values() {
-        let execution = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "synth",
-                    plugin = "Vital",
-                    preset = "synth.vital",
-                    volume = 1,
-                })
-                    .setParamValue("synth", "lfo_rate", 0.75)
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let execution = execute_file(&fixture("initial_parameter_value.lua")).unwrap();
 
         assert_eq!(
             execution.initial_parameter_values,
@@ -741,23 +635,7 @@ mod tests {
 
     #[test]
     fn set_param_value_can_be_called_from_effect_fn() {
-        let execution = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "synth",
-                    plugin = "Vital",
-                    preset = "synth.vital",
-                    volume = 1,
-                })
-                local effect = function(t, playing)
-                    resound.setParamValue("synth", "cutoff", playing and 0.8 or 0.1)
-                end
-                resound.pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let execution = execute_file(&fixture("parameter_from_effect.lua")).unwrap();
         let chord = &execution.state.chord_sets[0].chords[0];
 
         chord
@@ -778,26 +656,16 @@ mod tests {
 
     #[test]
     fn set_param_value_rejects_unknown_wav_and_out_of_range_targets() {
-        for (setup, call, expected) in [
+        for (name, expected) in [
             (
-                "",
-                r#"resound.setParamValue("missing", "param", 0.5)"#,
+                "parameter_unknown_instrument.lua",
                 "unknown instrument 'missing'",
             ),
-            (
-                r#"resound.addSample({name = "drums", path = "drums.wav", volume = 1})"#,
-                r#"resound.setParamValue("drums", "param", 0.5)"#,
-                "not a VST instrument",
-            ),
-            (
-                r#"resound.addInstrument({name = "synth", plugin = "Vital", preset = "synth.vital", volume = 1})"#,
-                r#"resound.setParamValue("synth", "param", 1.5)"#,
-                "between 0 and 1",
-            ),
+            ("parameter_wav_instrument.lua", "not a VST instrument"),
+            ("parameter_out_of_range.lua", "between 0 and 1"),
         ] {
-            let source = format!(r#"local resound = require("resound"); {setup}; {call}"#);
             assert!(
-                execute_source(&source, "test.lua".into())
+                execute_file(&fixture(name))
                     .unwrap_err()
                     .to_string()
                     .contains(expected)
@@ -807,65 +675,12 @@ mod tests {
 
     #[test]
     fn exposes_pitch_names_as_global_values() {
-        execute_source(
-            r#"
-                assert(cb0 == "cb0")
-                assert(c0 == "c0")
-                assert(cs0 == "cs0")
-                assert(db0 == "db0")
-                assert(eb0 == "eb0")
-                assert(b0 == "b0")
-                assert(c1 == "c1")
-                assert(a1 == "a1")
-                assert(as1 == "as1")
-                assert(b1 == "b1")
-                assert(bs9 == "bs9")
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        execute_file(&fixture("pitch_names.lua")).unwrap();
     }
 
     #[test]
     fn exposes_score_helpers_and_builds_chords() {
-        execute_source(
-            r#"
-                local resound = require("resound")
-                local note = n(c4, {2})
-                assert(note.pitches[1] == "c4")
-                assert(note.duration.length == 2)
-                assert(note.duration.playLength == nil)
-
-                local octave = o(bs8, {1, 0.5})
-                assert(octave.pitches[1] == "bs9")
-                assert(octave.duration.playLength == 0.5)
-
-                local chord = c({c4, e4, g4}, {4, 0.75})
-                assert(#chord.pitches == 3)
-                assert(chord.pitches[2] == "e4")
-                assert(chord.duration.length == 4)
-                assert(chord.duration.playLength == 0.75)
-
-                local percussion = p({0.5})
-                assert(#percussion.pitches == 1)
-                assert(percussion.pitches[1] == "x")
-                assert(percussion.duration.length == 0.5)
-
-                local rest = r({1})
-                assert(#rest.pitches == 0)
-                assert(rest.duration.length == 1)
-
-                resound.addInstrument({
-                    name = "synth",
-                    plugin = "Vital",
-                    preset = "synth.vital",
-                    volume = 1,
-                })
-                    .pushChords("synth", {rest}, {at = 1})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        execute_file(&fixture("score_helpers.lua")).unwrap();
     }
 
     #[test]
@@ -881,23 +696,7 @@ mod tests {
 
     #[test]
     fn stores_and_preserves_effect_fn_callbacks() {
-        let state = execute_source(
-            r#"
-                local resound = require("resound")
-                local effect = function(t, playing)
-                    return t, playing
-                end
-                resound.addInstrument({
-                    name = "synth",
-                    plugin = "Vital",
-                    preset = "synth.vital",
-                    volume = 1,
-                })
-                    .pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("effect_callback.lua")).unwrap();
 
         assert_eq!(state.chord_sets[0].chords[0].effect_fn.is_some(), true);
         let result = state.chord_sets[0].chords[0]
@@ -911,24 +710,16 @@ mod tests {
 
     #[test]
     fn rejects_unknown_pitch_names_and_octaving_past_range() {
-        let error = execute_source(r#"n("h4", {1})"#, "test.lua".into()).unwrap_err();
+        let error = execute_file(&fixture("unknown_pitch.lua")).unwrap_err();
         assert!(error.to_string().contains("unknown pitch name"));
 
-        let error = execute_source(r#"o(bs9, {1})"#, "test.lua".into()).unwrap_err();
+        let error = execute_file(&fixture("octave_overflow.lua")).unwrap_err();
         assert!(error.to_string().contains("ends at octave 9"));
     }
 
     #[test]
     fn collects_default_meter_and_pushed_chords() {
-        let state = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.setDefaultMeter(1.25)
-                    .pushChords("synth", {n(c4, {1}), r({0.5})}, {at = 2, times = 3})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("default_meter_and_chords.lua")).unwrap();
 
         assert_eq!(state.default_meter, 1.25);
         assert_eq!(state.chord_sets.len(), 1);
@@ -951,22 +742,7 @@ mod tests {
 
     #[test]
     fn creates_reusable_cache_keys_independent_of_bar_and_repeat_count() {
-        let state = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "synth",
-                    plugin = "Vital",
-                    preset = "synth.vital",
-                    volume = 1,
-                })
-                resound.pushChords("synth", {n(c4, {1})}, {at = 1, times = 2})
-                resound.pushChords("synth", {n(c4, {1})}, {at = 4})
-                resound.pushChords("synth", {n(d4, {1})}, {at = 4})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("cache_keys.lua")).unwrap();
 
         assert_eq!(state.chord_sets[0].cache_key, state.chord_sets[1].cache_key);
         assert_ne!(state.chord_sets[1].cache_key, state.chord_sets[2].cache_key);
@@ -974,36 +750,14 @@ mod tests {
 
     #[test]
     fn effect_chords_are_not_cacheable() {
-        let state = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addInstrument({
-                    name = "synth",
-                    plugin = "Vital",
-                    preset = "synth.vital",
-                    volume = 1,
-                })
-                local effect = function() end
-                resound.pushChords("synth", {n(c4, {1}, effect)}, {at = 1})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        let state = execute_file(&fixture("effect_not_cacheable.lua")).unwrap();
 
         assert_eq!(state.chord_sets[0].cache_key, None);
     }
 
     #[test]
     fn rejects_duplicate_sample_names() {
-        let error = execute_source(
-            r#"
-                local resound = require("resound")
-                resound.addSample({name = "kick", path = "samples/kick.wav", volume = 1})
-                    .addSample({name = "kick", path = "other/kick.wav", volume = 1})
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap_err();
+        let error = execute_file(&fixture("duplicate_sample_name.lua")).unwrap_err();
 
         assert!(
             error
@@ -1014,13 +768,6 @@ mod tests {
 
     #[test]
     fn exposes_sample_trigger_pitch() {
-        execute_source(
-            r#"
-                assert(x == "x")
-                assert(n(x, {1}).pitches[1] == "x")
-            "#,
-            "test.lua".into(),
-        )
-        .unwrap();
+        execute_file(&fixture("sample_trigger_pitch.lua")).unwrap();
     }
 }
