@@ -223,7 +223,8 @@ fn sequence_score_from_bar(
             for chord in &chord_set.chords {
                 let at_seconds = start_seconds + beat_offset * seconds_per_quarter;
                 let play_length = chord.duration.play_length.unwrap_or(chord.duration.length);
-                let note_off_seconds = at_seconds + play_length * seconds_per_quarter;
+                let note_off_seconds =
+                    start_seconds + (beat_offset + play_length) * seconds_per_quarter;
                 if !note_off_seconds.is_finite() {
                     return Err("chord gate extends beyond the supported timeline".into());
                 }
@@ -665,6 +666,57 @@ mod tests {
                 note: 60,
                 ..
             }
+        )));
+    }
+
+    #[test]
+    fn orders_repeated_note_events_at_the_same_non_binary_tempo_boundary() {
+        let state = LuaState {
+            default_bpm: 90.0,
+            default_meter: 4.0,
+            instruments: vec![InstrumentConfig {
+                name: "synth".into(),
+                plugin: "Vital".into(),
+                path: Some("synth.vst3".into()),
+                r#type: InstrumentType::Vst,
+                volume: 1.0,
+            }],
+            chord_sets: vec![ChordSet {
+                instrument_name: "synth".into(),
+                at: 1.0,
+                times: None,
+                cache_key: None,
+                chords: (0..11)
+                    .map(|_| Chord {
+                        pitches: vec!["d4".into()],
+                        duration: Duration {
+                            length: 0.5,
+                            play_length: Some(0.5),
+                        },
+                        effect_fn: None,
+                    })
+                    .collect(),
+            }],
+            ..LuaState::default()
+        };
+
+        let (score, _, _, _) = sequence_score_from_bar(&state, 1).unwrap();
+        let boundary_seconds = 5.0 * (60.0 / 90.0);
+
+        assert!(score.windows(2).any(|events| matches!(
+            events,
+            [
+                ScoreEvent::NoteOff {
+                    at_seconds: off_seconds,
+                    note: 62,
+                    ..
+                },
+                ScoreEvent::NoteOn {
+                    at_seconds: on_seconds,
+                    note: 62,
+                    ..
+                }
+            ] if off_seconds == on_seconds && *on_seconds == boundary_seconds
         )));
     }
 
